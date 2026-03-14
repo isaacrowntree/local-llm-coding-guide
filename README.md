@@ -92,21 +92,73 @@ curl http://localhost:8080/v1/chat/completions \
   }'
 ```
 
+## Supported Flows
+
+```
+Flow 1: Claude Code (local)
+  Claude Code → localhost:8080 → llama-server (Qwen3.5-9B)
+  No extras needed. Just env vars.
+
+Flow 2: Claude Code (remote, e.g. from MacBook)
+  MacBook Claude Code → cloudflared tunnel → llama-server (on PC)
+  Needs cloudflared on the PC.
+
+Flow 3: Cursor (Chat/Cmd+K only — Agent mode unsupported)
+  Cursor → Cursor servers → cloudflared → LiteLLM (name mapping) → llama-server
+  Needs LiteLLM + cloudflared.
+```
+
+### Scripts
+
+| Script | Flow | What it does |
+|--------|------|-------------|
+| `start-server.sh` | All | Start llama-server with Qwen3.5-9B |
+| `start-claude-local.sh` | 1 | Launch Claude Code with local Qwen |
+| `start-remote.sh` | 2 | Tunnel llama-server for remote access |
+| `start-cursor-local.sh` | 3 | LiteLLM proxy + tunnel for Cursor |
+| `stop-all.sh` | — | Kill everything |
+
+Always run `start-server.sh` first, then pick your flow.
+
 ## IDE Integration
 
 ### Claude Code (recommended for agentic coding)
 
-Works out of the box, no tunnel needed:
+**Flow 1: Local (same machine)**
 
 ```bash
-# Window 1: normal Claude (uses Anthropic API)
-claude
+# Terminal 1: start the server
+./start-server.sh
 
-# Window 2: local Qwen
+# Terminal 2: Claude Code with local Qwen
+./start-claude-local.sh
+```
+
+Or manually:
+```bash
 ANTHROPIC_BASE_URL=http://localhost:8080 ANTHROPIC_AUTH_TOKEN=local claude --model openai/qwen-3.5-9b
 ```
 
-You can run both side by side — use Claude for complex tasks, local Qwen for quick edits.
+You can run both side by side — normal `claude` for complex tasks, local Qwen for quick edits.
+
+**Flow 2: Remote (e.g. from MacBook)**
+
+On your PC:
+```bash
+# Terminal 1
+./start-server.sh
+
+# Terminal 2
+./start-remote.sh
+# Prints a tunnel URL like https://xxx-xxx.trycloudflare.com
+```
+
+On your MacBook:
+```bash
+ANTHROPIC_BASE_URL=https://xxx-xxx.trycloudflare.com \
+ANTHROPIC_AUTH_TOKEN=local \
+claude --model openai/qwen-3.5-9b
+```
 
 ### Cursor (limited — Agent mode unsupported)
 
