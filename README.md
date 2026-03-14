@@ -2,7 +2,9 @@
 
 Run Qwen3.5-9B locally as a coding assistant on consumer GPUs (8-12GB VRAM).
 
-Tested on: RTX 4070 Ti (12GB), Intel Core Ultra 9 285K, 48GB DDR5, WSL2 on Windows 11.
+Tested on:
+- **Windows/WSL2:** RTX 4070 Ti (12GB), Intel Core Ultra 9 285K, 48GB DDR5
+- **macOS:** M3 MacBook Pro, 36GB unified memory
 
 ## Performance
 
@@ -11,6 +13,10 @@ Tested on: RTX 4070 Ti (12GB), Intel Core Ultra 9 285K, 48GB DDR5, WSL2 on Windo
 | RTX 4070 Ti 12GB | Qwen3.5-9B Q4_K_M | ~65 tok/s | 131K | 7.8GB |
 | RTX 3060 12GB | Qwen3.5-9B Q4_K_M | ~43 tok/s | 128K | ~7.8GB |
 | RTX 3090 24GB | Qwen3.5-27B Q4_K_M | ~30 tok/s | 262K | ~18GB |
+| M3 Pro 36GB | Qwen3.5-27B Q4_K_M | ~15-20 tok/s* | 131K | ~18GB |
+| M3 Pro 36GB | Qwen3.5-9B Q4_K_M | ~30-40 tok/s* | 131K | ~7GB |
+
+*Apple Silicon tok/s varies — lower memory bandwidth than discrete GPUs but can run larger models.
 
 ## Quick Start
 
@@ -20,16 +26,19 @@ Tested on: RTX 4070 Ti (12GB), Intel Core Ultra 9 285K, 48GB DDR5, WSL2 on Windo
 
 Download the latest release for your platform from [llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases).
 
-**Option B: Build from source with CUDA**
+**Option B: Build from source (CUDA / Metal)**
 
 ```bash
 git clone https://github.com/ggml-org/llama.cpp.git
 cd llama.cpp
 
-# Find your GPU's compute capability: https://developer.nvidia.com/cuda-gpus
-# RTX 4070 Ti = 89, RTX 3090 = 86, RTX 3060 = 86
-cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="89"
+# Linux/WSL (NVIDIA GPU):
+cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="89"  # 89=4070Ti, 86=3090/3060
 cmake --build build -j$(nproc)
+
+# macOS (Apple Silicon):
+cmake -B build -DGGML_METAL=ON
+cmake --build build -j$(sysctl -n hw.ncpu)
 ```
 
 ### 2. Download the model
@@ -110,13 +119,14 @@ Flow 3: Cursor (Chat/Cmd+K only — Agent mode unsupported)
 
 ### Scripts
 
-| Script | Flow | What it does |
-|--------|------|-------------|
-| `start-server.sh` | All | Start llama-server with Qwen3.5-9B |
-| `start-claude-local.sh` | 1 | Launch Claude Code with local Qwen |
-| `start-remote.sh` | 2 | Tunnel llama-server for remote access |
-| `start-cursor-local.sh` | 3 | LiteLLM proxy + tunnel for Cursor |
-| `stop-all.sh` | — | Kill everything |
+| Script | Flow | Platform | What it does |
+|--------|------|----------|-------------|
+| `start-server.sh` | All | Linux/WSL | Start llama-server with Qwen3.5-9B |
+| `start-server-mac.sh` | All | macOS | Start llama-server (auto-picks 27B or 9B based on RAM) |
+| `start-claude-local.sh` | 1 | Any | Launch Claude Code with local Qwen |
+| `start-remote.sh` | 2 | Linux/WSL | Tunnel llama-server for remote access |
+| `start-cursor-local.sh` | 3 | Linux/WSL | LiteLLM proxy + tunnel for Cursor |
+| `stop-all.sh` | — | Any | Kill everything |
 
 Always run `start-server.sh` first, then pick your flow.
 
@@ -231,6 +241,7 @@ Best for tab completion with local models:
 | 12GB | Qwen3.5-9B | 5.3GB | 128K+ |
 | 16GB | Qwen3.5-9B or Qwen3-14B | 5.3-8.4GB | 128K+ |
 | 24GB | Qwen3.5-27B | ~16GB | 262K |
+| 36GB (Apple Silicon) | Qwen3.5-27B | ~16GB | 131K+ |
 
 ### Why Qwen3.5-9B?
 
