@@ -50,7 +50,7 @@ $LLAMA_SERVER \
   -np 1 \
   --cache-type-k q4_0 \
   --cache-type-v q4_0 \
-  --reasoning-budget 0 \
+  --reasoning-budget -1 \
   --metrics \
   -a "qwen-3.5-9b" \
   2>&1 | tee "$LOG"

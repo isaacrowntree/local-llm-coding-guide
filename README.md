@@ -1,6 +1,6 @@
 # Local LLM Coding Guide
 
-Run Qwen3.5-9B locally as a coding assistant on consumer GPUs (8-12GB VRAM).
+Run Qwen3.5 locally as a coding assistant on consumer hardware.
 
 Tested on:
 - **Windows/WSL2:** RTX 4070 Ti (12GB), Intel Core Ultra 9 285K, 48GB DDR5
@@ -8,15 +8,16 @@ Tested on:
 
 ## Performance
 
-| GPU | Model | Tok/s | Context | VRAM Used |
-|-----|-------|-------|---------|-----------|
+| GPU | Model | Tok/s | Context | Memory Used |
+|-----|-------|-------|---------|-------------|
 | RTX 4070 Ti 12GB | Qwen3.5-9B Q4_K_M | ~65 tok/s | 131K | 7.8GB |
 | RTX 3060 12GB | Qwen3.5-9B Q4_K_M | ~43 tok/s | 128K | ~7.8GB |
 | RTX 3090 24GB | Qwen3.5-27B Q4_K_M | ~30 tok/s | 262K | ~18GB |
-| M3 Pro 36GB | Qwen3.5-27B Q4_K_M | ~15-20 tok/s* | 131K | ~18GB |
-| M3 Pro 36GB | Qwen3.5-9B Q4_K_M | ~30-40 tok/s* | 131K | ~7GB |
+| M3 Pro 36GB | **Qwen3.5-35B-A3B Q4_K_M** | **~29 tok/s** | 131K | **~22GB** |
+| M3 Pro 36GB | Qwen3.5-9B Q4_K_M | ~20 tok/s | 131K | ~7GB |
+| M3 Pro 36GB | Qwen3.5-27B Q4_K_M | ~9 tok/s* | 131K | ~18GB |
 
-*Apple Silicon tok/s varies — lower memory bandwidth than discrete GPUs but can run larger models.
+*The dense 27B model is slower than the 35B-A3B on 36GB machines due to higher memory bandwidth requirements. The 35B-A3B (MoE) is faster *and* smarter — see [Why MoE?](#why-moe-mixture-of-experts) below.
 
 ## Quick Start
 
@@ -43,15 +44,36 @@ cmake --build build -j$(sysctl -n hw.ncpu)
 
 ### 2. Download the model
 
+**For macOS with 32GB+ RAM (recommended):**
 ```bash
 pip install huggingface-hub
+huggingface-cli download unsloth/Qwen3.5-35B-A3B-GGUF Qwen3.5-35B-A3B-Q4_K_M.gguf --local-dir ./models
+```
+
+**For NVIDIA GPUs (8-12GB VRAM):**
+```bash
 huggingface-cli download unsloth/Qwen3.5-9B-GGUF Qwen3.5-9B-Q4_K_M.gguf --local-dir ./models
 ```
 
-The Q4_K_M quant is 5.3GB — fits on any 8GB+ GPU.
-
 ### 3. Start the server
 
+**macOS (Apple Silicon):**
+```bash
+./llama-server \
+  -m models/Qwen3.5-35B-A3B-Q4_K_M.gguf \
+  --host 0.0.0.0 --port 8080 \
+  -ngl 99 \
+  -c 131072 \
+  -b 4096 \
+  -fa on \
+  -np 1 \
+  --cache-type-k q4_0 \
+  --cache-type-v q4_0 \
+  --reasoning-budget -1 \
+  --metrics
+```
+
+**Linux/WSL (NVIDIA GPU):**
 ```bash
 ./llama-server \
   -m models/Qwen3.5-9B-Q4_K_M.gguf \
@@ -63,7 +85,7 @@ The Q4_K_M quant is 5.3GB — fits on any 8GB+ GPU.
   -np 1 \
   --cache-type-k q4_0 \
   --cache-type-v q4_0 \
-  --reasoning-budget 0 \
+  --reasoning-budget -1 \
   --metrics
 ```
 
@@ -74,7 +96,7 @@ The Q4_K_M quant is 5.3GB — fits on any 8GB+ GPU.
 | `-ngl 99` | Offload all layers to GPU |
 | `-c 131072` | Context window (model supports up to 262K) |
 | `--cache-type-k q4_0 --cache-type-v q4_0` | Quantize KV cache to fit large context in VRAM |
-| `--reasoning-budget 0` | Disable thinking mode for faster responses |
+| `--reasoning-budget -1` | Allow thinking mode (model reasons before answering) |
 | `-fa on` | Flash attention |
 | `-np 1` | Single slot (saves memory) |
 | `--metrics` | Enable `/metrics` endpoint |
@@ -101,19 +123,45 @@ curl http://localhost:8080/v1/chat/completions \
   }'
 ```
 
+## Why MoE (Mixture of Experts)?
+
+MoE models have more total parameters but only **activate a fraction per token**. This means less computation per token = faster inference, while the model retains knowledge from all its parameters.
+
+| Model | Total Params | Active Params | Q4_K_M Size | Quality Tier |
+|-------|-------------|---------------|-------------|-------------|
+| Qwen3.5-9B | 9B | 9B (dense) | 5.3GB | GPT-4o-mini / Haiku |
+| Qwen3.5-27B | 27B | 27B (dense) | 16GB | Sonnet-ish |
+| **Qwen3.5-35B-A3B** | **35B** | **3B** | **22GB** | **Sonnet 4.5** |
+
+The 35B-A3B is the sweet spot for Apple Silicon: it's **faster than the 9B** (29 vs 20 tok/s on M3 Pro) because it only computes 3B params per token, yet **smarter than the 27B** because it draws from 35B total parameters. It [beats Sonnet 4.5 on several benchmarks](https://venturebeat.com/technology/alibabas-new-open-source-qwen3-5-medium-models-offer-sonnet-4-5-performance) including instruction following and visual reasoning.
+
+**The tradeoff:** MoE models are larger on disk (22GB vs 16GB for the dense 27B) because they store all expert weights even though only a subset is used per token. On machines with limited RAM, the 9B dense model may be the better fit.
+
+### Thinking mode
+
+These models support a "thinking" mode where they reason through problems before answering — similar to Claude's extended thinking or DeepSeek R1. This is controlled by `--reasoning-budget`:
+
+| Flag | Behavior |
+|------|----------|
+| `--reasoning-budget -1` | Thinking enabled (recommended) — model decides when to think |
+| `--reasoning-budget 0` | Thinking disabled — faster but lower quality on hard tasks |
+| `--reasoning-budget 1024` | Cap thinking at 1024 tokens |
+
+We recommend `-1` (unlimited) for coding tasks. The model only thinks when it determines the problem is complex enough to warrant it, so simple requests stay fast.
+
 ## Supported Flows
 
 ```
 Flow 1: Claude Code (local)
-  Claude Code → localhost:8080 → llama-server (Qwen3.5-9B)
+  Claude Code -> localhost:8080 -> llama-server (Qwen3.5)
   No extras needed. Just env vars.
 
 Flow 2: Claude Code (remote, e.g. from MacBook)
-  MacBook Claude Code → cloudflared tunnel → llama-server (on PC)
+  MacBook Claude Code -> cloudflared tunnel -> llama-server (on PC)
   Needs cloudflared on the PC.
 
 Flow 3: Cursor (Chat/Cmd+K only — Agent mode unsupported)
-  Cursor → Cursor servers → cloudflared → LiteLLM (name mapping) → llama-server
+  Cursor -> Cursor servers -> cloudflared -> LiteLLM (name mapping) -> llama-server
   Needs LiteLLM + cloudflared.
 ```
 
@@ -122,13 +170,13 @@ Flow 3: Cursor (Chat/Cmd+K only — Agent mode unsupported)
 | Script | Flow | Platform | What it does |
 |--------|------|----------|-------------|
 | `start-server.sh` | All | Linux/WSL | Start llama-server with Qwen3.5-9B |
-| `start-server-mac.sh` | All | macOS | Start llama-server (auto-picks 27B or 9B based on RAM) |
-| `start-claude-local.sh` | 1 | Any | Launch Claude Code with local Qwen |
+| `start-server-mac.sh` | All | macOS | Start llama-server (auto-picks 35B-A3B or 9B based on RAM) |
+| `start-claude-local.sh` | 1 | Any | Launch Claude Code with local Qwen (auto-detects model) |
 | `start-remote.sh` | 2 | Linux/WSL | Tunnel llama-server for remote access |
 | `start-cursor-local.sh` | 3 | Linux/WSL | LiteLLM proxy + tunnel for Cursor |
 | `stop-all.sh` | — | Any | Kill everything |
 
-Always run `start-server.sh` first, then pick your flow.
+Always run `start-server.sh` or `start-server-mac.sh` first, then pick your flow.
 
 ## IDE Integration
 
@@ -138,7 +186,8 @@ Always run `start-server.sh` first, then pick your flow.
 
 ```bash
 # Terminal 1: start the server
-./start-server.sh
+./start-server-mac.sh   # macOS
+./start-server.sh       # Linux/WSL
 
 # Terminal 2: Claude Code with local Qwen
 ./start-claude-local.sh
@@ -146,7 +195,7 @@ Always run `start-server.sh` first, then pick your flow.
 
 Or manually:
 ```bash
-ANTHROPIC_BASE_URL=http://localhost:8080 ANTHROPIC_AUTH_TOKEN=local claude --model openai/qwen-3.5-9b
+ANTHROPIC_BASE_URL=http://localhost:8080 ANTHROPIC_AUTH_TOKEN=local claude --model openai/qwen
 ```
 
 You can run both side by side — normal `claude` for complex tasks, local Qwen for quick edits.
@@ -167,7 +216,7 @@ On your MacBook:
 ```bash
 ANTHROPIC_BASE_URL=https://xxx-xxx.trycloudflare.com \
 ANTHROPIC_AUTH_TOKEN=local \
-claude --model openai/qwen-3.5-9b
+claude --model openai/qwen
 ```
 
 ### Cursor (limited — Agent mode unsupported)
@@ -201,10 +250,10 @@ claude --model openai/qwen-3.5-9b
    cloudflared tunnel --url http://localhost:4000 --protocol http2
    ```
 
-5. In Cursor Settings → Models:
-   - Click **+ Add Custom Model** → `deepseek-r1-0528`
-   - Override OpenAI Base URL → `https://<your-tunnel>.trycloudflare.com/v1`
-   - API Key → any string (e.g. `sk-1234`)
+5. In Cursor Settings -> Models:
+   - Click **+ Add Custom Model** -> `deepseek-r1-0528`
+   - Override OpenAI Base URL -> `https://<your-tunnel>.trycloudflare.com/v1`
+   - API Key -> any string (e.g. `sk-1234`)
 
 6. Select `deepseek-r1-0528` in Chat mode (not Agent mode).
 
@@ -215,9 +264,9 @@ We use `deepseek-r1-0528` as the model name because Cursor's validation accepts 
 Cline supports local models with no restrictions:
 
 1. Install [Cline](https://marketplace.visualstudio.com/items?itemName=saoudrizwan.claude-dev) in VS Code
-2. Settings → API Provider → OpenAI Compatible
+2. Settings -> API Provider -> OpenAI Compatible
 3. Base URL: `http://localhost:8080/v1`
-4. Model: `qwen-3.5-9b`
+4. Model: `qwen`
 5. API Key: any string
 
 Works in agent mode — no tunnel, no name hacks.
@@ -235,33 +284,34 @@ Best for tab completion with local models:
 
 ## Model Selection Guide
 
-| GPU VRAM | Recommended Model | Q4_K_M Size | Context |
-|----------|-------------------|-------------|---------|
-| 8GB | Qwen3.5-9B | 5.3GB | 16-32K |
-| 12GB | Qwen3.5-9B | 5.3GB | 128K+ |
-| 16GB | Qwen3.5-9B or Qwen3-14B | 5.3-8.4GB | 128K+ |
-| 24GB | Qwen3.5-27B | ~16GB | 262K |
-| 36GB (Apple Silicon) | Qwen3.5-27B | ~16GB | 131K+ |
+| Memory | Recommended Model | Type | Q4_K_M Size | Tok/s (approx) | Quality Tier |
+|--------|-------------------|------|-------------|-----------------|-------------|
+| 8GB VRAM | Qwen3.5-9B | Dense | 5.3GB | ~43-65 | Haiku |
+| 12GB VRAM | Qwen3.5-9B | Dense | 5.3GB | ~43-65 | Haiku |
+| 16GB VRAM | Qwen3.5-9B | Dense | 5.3GB | ~43-65 | Haiku |
+| 24GB VRAM | Qwen3.5-27B | Dense | 16GB | ~30 | Sonnet-ish |
+| 32GB+ (Apple Silicon) | **Qwen3.5-35B-A3B** | **MoE** | **22GB** | **~29** | **Sonnet 4.5** |
+| 36GB+ (Apple Silicon) | **Qwen3.5-35B-A3B** | **MoE** | **22GB** | **~29** | **Sonnet 4.5** |
 
-### Why Qwen3.5-9B?
+### Why not the dense 27B on Apple Silicon?
 
-Released March 2, 2026, part of the Qwen3.5 Small Series. Key advantages:
-- Outperforms the previous-gen Qwen3-30B on most benchmarks despite being 9B
-- 262K native context with Gated DeltaNet hybrid architecture
-- Only 5.3GB in Q4_K_M — fits on any 8GB+ GPU with room for large context
-- ~65 tok/s on RTX 4070 Ti, ~43 tok/s on RTX 3060
+On a 36GB M3 Pro, the dense 27B model uses ~18GB for weights + 2.3GB for KV cache, leaving very little headroom. In practice this causes **swap thrashing** (~1.7 tok/s) when other apps are running. The 35B-A3B MoE is larger on disk (22GB) but faster at inference because it only activates 3B parameters per token.
 
 ### Honest comparison to premium models
 
-Qwen3.5-9B sits roughly in the **GPT-4o-mini / Claude Haiku tier**. It handles single-file tasks, completions, and simple bugs well. It struggles with complex multi-step reasoning and autonomous agentic workflows compared to Claude Sonnet/Opus or GPT-4o.
+The **Qwen3.5-35B-A3B** sits roughly in the **Sonnet 4.5 tier** — it beats Sonnet 4.5 on instruction following (IFBench) and is competitive on coding benchmarks. It handles single-file tasks, refactoring, bug fixes, and test writing well.
 
-Best used for: fast completions, quick edits, boilerplate, explanations, unit tests.
-Still need a premium model for: complex refactoring, multi-file changes, agentic "keep hammering" workflows.
+The **Qwen3.5-9B** sits in the **GPT-4o-mini / Haiku tier**. Good for fast completions, quick edits, boilerplate, and explanations.
+
+Both still fall short of Claude Opus or GPT-4.5 on complex multi-step reasoning and autonomous agentic workflows. Best strategy: use local models for quick edits and premium APIs for hard problems.
 
 ## Troubleshooting
 
 ### OOM / CUDA out of memory
 Reduce context: `-c 32768` or `-c 16384`. The KV cache scales with context size.
+
+### Slow on Apple Silicon (< 10 tok/s)
+Check `memory_pressure` — if free memory is below 20%, you're swap-thrashing. Close memory-hungry apps (Chrome is usually the biggest offender) or switch to the 9B model.
 
 ### Slow prompt processing
 Make sure all layers are on GPU (`offloaded N/N layers to GPU` in logs). If not, reduce context or use a smaller quant.
