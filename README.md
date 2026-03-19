@@ -10,6 +10,7 @@ Tested on:
 
 | GPU | Model | Tok/s | Context | Memory Used |
 |-----|-------|-------|---------|-------------|
+| RTX 4070 Ti 12GB | Nemotron 3 Nano 4B Q4_K_M | TBD | 262K | ~5GB |
 | RTX 4070 Ti 12GB | Qwen3.5-9B Q4_K_M | ~65 tok/s | 131K | 7.8GB |
 | RTX 3060 12GB | Qwen3.5-9B Q4_K_M | ~43 tok/s | 128K | ~7.8GB |
 | RTX 3090 24GB | Qwen3.5-27B Q4_K_M | ~30 tok/s | 262K | ~18GB |
@@ -53,6 +54,11 @@ huggingface-cli download unsloth/Qwen3.5-35B-A3B-GGUF Qwen3.5-35B-A3B-Q4_K_M.ggu
 **For NVIDIA GPUs (8-12GB VRAM):**
 ```bash
 huggingface-cli download unsloth/Qwen3.5-9B-GGUF Qwen3.5-9B-Q4_K_M.gguf --local-dir ./models
+```
+
+**Alternate: Nemotron 3 Nano 4B (lighter, faster, 262K context):**
+```bash
+huggingface-cli download unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf --local-dir ./models
 ```
 
 ### 3. Start the server
@@ -129,6 +135,7 @@ MoE models have more total parameters but only **activate a fraction per token**
 
 | Model | Total Params | Active Params | Q4_K_M Size | Quality Tier |
 |-------|-------------|---------------|-------------|-------------|
+| Nemotron 3 Nano 4B | 4B | 4B (hybrid Mamba-2) | ~2.5GB | Below Haiku (edge/agent) |
 | Qwen3.5-9B | 9B | 9B (dense) | 5.3GB | GPT-4o-mini / Haiku |
 | Qwen3.5-27B | 27B | 27B (dense) | 16GB | Sonnet-ish |
 | **Qwen3.5-35B-A3B** | **35B** | **3B** | **22GB** | **Sonnet 4.5** |
@@ -169,7 +176,7 @@ Flow 3: Cursor (Chat/Cmd+K only — Agent mode unsupported)
 
 | Script | Flow | Platform | What it does |
 |--------|------|----------|-------------|
-| `start-server.sh` | All | Linux/WSL | Start llama-server with Qwen3.5-9B |
+| `start-server.sh` | All | Linux/WSL | Start llama-server (default: Qwen3.5-9B, or `./start-server.sh nemotron`) |
 | `start-server-mac.sh` | All | macOS | Start llama-server (auto-picks 35B-A3B or 9B based on RAM) |
 | `start-claude-local.sh` | 1 | Any | Launch Claude Code with local Qwen (auto-detects model) |
 | `start-remote.sh` | 2 | Linux/WSL | Tunnel llama-server for remote access |
@@ -287,11 +294,14 @@ Best for tab completion with local models:
 | Memory | Recommended Model | Type | Q4_K_M Size | Tok/s (approx) | Quality Tier |
 |--------|-------------------|------|-------------|-----------------|-------------|
 | 8GB VRAM | Qwen3.5-9B | Dense | 5.3GB | ~43-65 | Haiku |
+| 8GB VRAM | Nemotron 3 Nano 4B (alt) | Hybrid Mamba-2 | ~2.5GB | faster* | Below Haiku |
 | 12GB VRAM | Qwen3.5-9B | Dense | 5.3GB | ~43-65 | Haiku |
 | 16GB VRAM | Qwen3.5-9B | Dense | 5.3GB | ~43-65 | Haiku |
 | 24GB VRAM | Qwen3.5-27B | Dense | 16GB | ~30 | Sonnet-ish |
 | 32GB+ (Apple Silicon) | **Qwen3.5-35B-A3B** | **MoE** | **22GB** | **~29** | **Sonnet 4.5** |
 | 36GB+ (Apple Silicon) | **Qwen3.5-35B-A3B** | **MoE** | **22GB** | **~29** | **Sonnet 4.5** |
+
+\*Nemotron 3 Nano 4B uses a hybrid Mamba-2 + Transformer architecture (mostly Mamba-2 layers with just 4 attention layers). It's significantly faster than the 9B, uses only ~5GB VRAM, and supports 262K context. The tradeoff is lower coding quality — it's designed for edge agents and local assistants rather than deep reasoning. Use it when you want maximum speed or need the longer context window. Run it with `./start-server.sh nemotron`.
 
 ### Why not the dense 27B on Apple Silicon?
 
@@ -342,6 +352,7 @@ Then restart WSL: `wsl --shutdown`
 - [@sudoingX](https://x.com/sudoingX) for the optimized llama-server flags and Qwen3.5 benchmarks
 - [llama.cpp](https://github.com/ggml-org/llama.cpp) by ggml-org
 - [Qwen3.5](https://github.com/QwenLM/Qwen3.5) by Alibaba Qwen team
+- [Nemotron 3 Nano](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16) by NVIDIA
 - [unsloth](https://huggingface.co/unsloth) for GGUF quantizations
 - [LiteLLM](https://github.com/BerriAI/litellm) for the proxy workaround
 
