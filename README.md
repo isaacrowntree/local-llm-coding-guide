@@ -1,6 +1,6 @@
 # Local LLM Coding Guide
 
-Run Qwen3.5 locally as a coding assistant on consumer hardware.
+Run local LLMs as a coding assistant on consumer hardware. Supports Qwen3.5 and Gemma 4 via llama.cpp, Ollama (MLX), or vllm-mlx.
 
 Tested on:
 - **Windows/WSL2:** RTX 4070 Ti (12GB), Intel Core Ultra 9 285K, 48GB DDR5
@@ -17,6 +17,8 @@ Tested on:
 | M3 Pro 36GB | **Qwen3.5-35B-A3B Q4_K_M** | **~29 tok/s** | 131K | **~22GB** |
 | M3 Pro 36GB | Qwen3.5-9B Q4_K_M | ~20 tok/s | 131K | ~7GB |
 | M3 Pro 36GB | Qwen3.5-27B Q4_K_M | ~9 tok/s* | 131K | ~18GB |
+| M3 Pro 36GB | Gemma 4 26B-A4B Q4_K_M | TBD | 256K | ~17GB |
+| M3 Pro 36GB | Gemma 4 31B Q4_K_M | TBD | 256K | ~18GB |
 
 *The dense 27B model is slower than the 35B-A3B on 36GB machines due to higher memory bandwidth requirements. The 35B-A3B (MoE) is faster *and* smarter — see [Why MoE?](#why-moe-mixture-of-experts) below.
 
@@ -54,6 +56,16 @@ huggingface-cli download unsloth/Qwen3.5-35B-A3B-GGUF Qwen3.5-35B-A3B-Q4_K_M.ggu
 **For NVIDIA GPUs (8-12GB VRAM):**
 ```bash
 huggingface-cli download unsloth/Qwen3.5-9B-GGUF Qwen3.5-9B-Q4_K_M.gguf --local-dir ./models
+```
+
+**Gemma 4 26B-A4B MoE (recommended alternative for macOS 32GB+):**
+```bash
+huggingface-cli download unsloth/gemma-4-26B-A4B-it-GGUF gemma-4-26B-A4B-it-Q4_K_M.gguf --local-dir ./models
+```
+
+**Gemma 4 31B dense (for comparison benchmarking):**
+```bash
+huggingface-cli download unsloth/gemma-4-31B-it-GGUF gemma-4-31B-it-Q4_K_M.gguf --local-dir ./models
 ```
 
 **Alternate: Nemotron 3 Nano 4B (lighter, faster, 262K context):**
@@ -133,12 +145,15 @@ curl http://localhost:8080/v1/chat/completions \
 
 MoE models have more total parameters but only **activate a fraction per token**. This means less computation per token = faster inference, while the model retains knowledge from all its parameters.
 
-| Model | Total Params | Active Params | Q4_K_M Size | Quality Tier |
-|-------|-------------|---------------|-------------|-------------|
-| Nemotron 3 Nano 4B | 4B | 4B (hybrid Mamba-2) | ~2.5GB | Below Haiku (edge/agent) |
-| Qwen3.5-9B | 9B | 9B (dense) | 5.3GB | GPT-4o-mini / Haiku |
-| Qwen3.5-27B | 27B | 27B (dense) | 16GB | Sonnet-ish |
-| **Qwen3.5-35B-A3B** | **35B** | **3B** | **22GB** | **Sonnet 4.5** |
+| Model | Total Params | Active Params | Q4 Size | Context | Quality Tier |
+|-------|-------------|---------------|---------|---------|-------------|
+| Nemotron 3 Nano 4B | 4B | 4B (hybrid Mamba-2) | ~2.5GB | 262K | Below Haiku (edge/agent) |
+| Gemma 4 E4B | 8B | 4.5B (dense) | ~5GB | 128K | TBD |
+| Qwen3.5-9B | 9B | 9B (dense) | 5.3GB | 131K | GPT-4o-mini / Haiku |
+| Qwen3.5-27B | 27B | 27B (dense) | 16GB | 131K | Sonnet-ish |
+| **Gemma 4 26B-A4B** | **26B** | **4B (MoE)** | **16.9GB** | **256K** | **TBD** |
+| Gemma 4 31B | 31B | 31B (dense) | 18.3GB | 256K | TBD |
+| **Qwen3.5-35B-A3B** | **35B** | **3B (MoE)** | **22GB** | **131K** | **Sonnet 4.5** |
 
 The 35B-A3B is the sweet spot for Apple Silicon: it's **faster than the 9B** (29 vs 20 tok/s on M3 Pro) because it only computes 3B params per token, yet **smarter than the 27B** because it draws from 35B total parameters. It [beats Sonnet 4.5 on several benchmarks](https://venturebeat.com/technology/alibabas-new-open-source-qwen3-5-medium-models-offer-sonnet-4-5-performance) including instruction following and visual reasoning.
 
@@ -155,6 +170,242 @@ These models support a "thinking" mode where they reason through problems before
 | `--reasoning-budget 1024` | Cap thinking at 1024 tokens |
 
 We recommend `-1` (unlimited) for coding tasks. The model only thinks when it determines the problem is complex enough to warrant it, so simple requests stay fast.
+
+## Inference Engines (NVIDIA CUDA)
+
+llama.cpp is the reliable default. ExLlamaV3 + TabbyAPI is ~50-60% faster using custom CUDA kernels but only supports EXL3 format.
+
+| Engine | ~Tok/s (9B, 4-bit) | Format | Gemma 4? | Setup |
+|--------|-------------------|--------|----------|-------|
+| **ExLlamaV3 + TabbyAPI** | **~100-130** | EXL3 (CUDA-only) | Not yet | `git clone` + `start.sh` |
+| **TensorRT-LLM** | **~80-95** | TRT engine / HF | Not yet | Docker container |
+| **llama.cpp** | ~65 | GGUF (universal) | Yes (day-0) | Build or download binary |
+| Ollama | ~62 | GGUF (llama.cpp backend) | Yes | `brew install ollama` |
+
+**Why two formats?** GGUF is universal (CUDA, Metal, CPU, Vulkan) using generic compute kernels. EXL3 trades portability for speed — it uses hand-tuned CUDA kernels optimized for NVIDIA memory hierarchy, so it only runs on NVIDIA GPUs but is significantly faster.
+
+### ExLlamaV3 + TabbyAPI (fastest for NVIDIA)
+
+ExLlamaV3 uses the EXL3 format with calibration-based quantization — it measures which layers matter most and allocates more bits to them. TabbyAPI serves it with an OpenAI-compatible API.
+
+> **Note:** ExLlamaV2 is archived. ExLlamaV3 + EXL3 is the active project. Gemma 4 is not yet supported — use llama.cpp for Gemma 4 on CUDA.
+
+**Setup:**
+```bash
+git clone https://github.com/theroyallab/tabbyAPI
+cd tabbyAPI
+
+# Linux/WSL
+./start.sh
+
+# Windows
+start.bat
+```
+
+First launch is slow (JIT-compiles CUDA extensions). Subsequent launches are fast.
+
+**Download a model:**
+```bash
+# Qwen3.5-9B at 4.0 bits per weight (~4.5GB, fits easily in 12GB VRAM)
+./start.sh download turboderp/Qwen3.5-9B-exl3 --revision 4.00bpw
+
+# Qwen3.5-9B at 5.0 bpw (~5.6GB, higher quality, still fits 12GB)
+./start.sh download turboderp/Qwen3.5-9B-exl3 --revision 5.00bpw
+```
+
+**Configure** `config.yml`:
+```yaml
+host: 0.0.0.0
+port: 5000
+disable_auth: true
+
+backend: exllamav3
+model_dir: models
+model_name: Qwen3.5-9B-exl3
+
+max_seq_len: 32768
+cache_size: 32768
+cache_mode: Q4
+
+gpu_split_auto: true
+reasoning: true
+```
+
+**Claude Code integration:**
+```bash
+ANTHROPIC_BASE_URL=http://localhost:5000/v1 \
+ANTHROPIC_AUTH_TOKEN=local \
+claude --model openai/qwen
+```
+
+**Or use the script:**
+```bash
+./start-tabby.sh              # default: Qwen3.5-9B 4.0bpw
+./start-tabby.sh 5bpw         # higher quality 5.0bpw
+```
+
+### EXL3 models for 12GB VRAM
+
+| Model | Repo | bpw | Size | Fits 12GB? |
+|-------|------|-----|------|------------|
+| **Qwen3.5-9B** | `turboderp/Qwen3.5-9B-exl3` | 4.0 | ~4.5GB | Yes (recommended) |
+| Qwen3.5-9B | `turboderp/Qwen3.5-9B-exl3` | 5.0 | ~5.6GB | Yes (higher quality) |
+| Qwen3.5-9B | `turboderp/Qwen3.5-9B-exl3` | 6.0 | ~6.7GB | Yes |
+| Gemma 4 * | — | — | — | Not yet supported |
+
+\*ExLlamaV3 supports Gemma 2 and 3, but not Gemma 4 yet. Watch the [ExLlamaV3 repo](https://github.com/turboderp-org/exllamav3) for updates.
+
+### TensorRT-LLM (maximum optimization after you've chosen a model)
+
+Once you've benchmarked models with llama.cpp / ExLlamaV3 and picked one, TensorRT-LLM compiles it into a GPU-specific execution graph optimized for your exact hardware. It's the most work to set up but produces the most optimized inference.
+
+> **Current limitations:** Qwen3.5 only via AutoDeploy (beta) — Qwen3 is fully supported. Gemma 4 not supported yet (Gemma 3 only). FP4 requires Blackwell GPUs — Ada (4070 Ti) maxes out at FP8/INT4.
+
+**Install via Docker (recommended):**
+```bash
+# Verify GPU in WSL2
+nvidia-smi
+
+# Launch TRT-LLM container
+docker run --rm -it \
+  --ipc host --gpus all \
+  --ulimit memlock=-1 --ulimit stack=67108864 \
+  -p 8000:8000 \
+  -v $(pwd)/models:/models \
+  nvcr.io/nvidia/tensorrt-llm/release:1.3.0rc10
+```
+
+**Option A: PyTorch backend (no build step, fast start):**
+```bash
+# Serve directly from HuggingFace — downloads and starts in 1-3 min
+trtllm-serve Qwen/Qwen3-8B \
+  --backend pytorch \
+  --host 0.0.0.0 --port 8000 \
+  --max_batch_size 1 \
+  --max_seq_len 32768 \
+  --kv_cache_dtype fp8 \
+  --kv_cache_free_gpu_memory_fraction 0.85
+
+# Or use NVIDIA's pre-quantized FP8 checkpoint
+trtllm-serve nvidia/Qwen3-8B-FP8 \
+  --backend pytorch \
+  --host 0.0.0.0 --port 8000 \
+  --max_batch_size 1 \
+  --max_seq_len 32768 \
+  --kv_cache_dtype fp8 \
+  --kv_cache_free_gpu_memory_fraction 0.85
+```
+
+**Option B: TensorRT engine build (maximum performance):**
+```bash
+# Step 1: Quantize to INT4 AWQ (use --device cpu if 12GB OOMs)
+python quantization/quantize.py \
+  --model_dir ./models/Qwen3-8B \
+  --dtype float16 \
+  --qformat int4_awq \
+  --awq_block_size 128 \
+  --output_dir ./checkpoints/qwen3-8b-int4-awq \
+  --calib_size 32
+
+# Step 2: Build engine (10-30 min, writes GPU-specific binary)
+trtllm-build \
+  --checkpoint_dir ./checkpoints/qwen3-8b-int4-awq \
+  --output_dir ./engines/qwen3-8b-int4-awq \
+  --gemm_plugin float16
+
+# Step 3: Serve the compiled engine (~90s to load on subsequent starts)
+trtllm-serve ./engines/qwen3-8b-int4-awq \
+  --backend tensorrt \
+  --tokenizer Qwen/Qwen3-8B \
+  --host 0.0.0.0 --port 8000
+```
+
+**Quantization options on Ada Lovelace (RTX 4070 Ti):**
+
+| Method | Size (8B model) | Speed | Quality | Ada Support |
+|--------|-----------------|-------|---------|-------------|
+| FP8 (recommended) | ~8GB | Fastest | Best | Yes |
+| INT4 AWQ (W4A16) | ~4.5GB | Fast | Good | Yes |
+| W4A8 AWQ | ~4.5GB | Faster | Good | Yes |
+| FP4 / NVFP4 | — | — | — | **No (Blackwell only)** |
+
+**Claude Code integration:**
+```bash
+ANTHROPIC_BASE_URL=http://localhost:8000/v1 \
+ANTHROPIC_AUTH_TOKEN=local \
+claude --model openai/qwen
+```
+
+**Performance vs other engines (estimated, 8-9B INT4, RTX 4070 Ti):**
+
+| Engine | ~Tok/s | Notes |
+|--------|--------|-------|
+| ExLlamaV3 (EXL3) | ~100-130 | Custom CUDA kernels, single-user champion |
+| TensorRT-LLM (TRT engine) | ~80-95 | GPU-specific compiled graph, higher VRAM overhead |
+| TensorRT-LLM (PyTorch) | ~75-85 | No build step, good middle ground |
+| llama.cpp (GGUF) | ~65 | Universal format, broadest compatibility |
+
+TRT-LLM's advantage grows with batched/concurrent inference. For single-user coding, ExLlamaV3 may match or exceed it due to its hand-tuned decode kernels. TRT-LLM becomes the clear winner when serving multiple users or running longer-context workloads where its compiled attention kernels shine.
+
+## Inference Engines (macOS Apple Silicon)
+
+llama.cpp is the default, but MLX-based engines can be significantly faster on Apple Silicon.
+
+| Engine | Decode Speed | Prefill Speed | Format | Claude Code API | Setup |
+|--------|-------------|---------------|--------|-----------------|-------|
+| **llama.cpp** | Baseline | Fast | GGUF | OpenAI (needs `openai/` prefix) | `brew install llama.cpp` |
+| **Ollama 0.19+** | ~93% faster (MLX backend) | ~57% faster | Auto (GGUF/MLX) | OpenAI | `brew install ollama` |
+| **vllm-mlx** | MLX-native | Good | MLX | **Native Anthropic** (no proxy) | `pip install` from git |
+
+### Ollama (recommended for ease of use)
+
+Ollama 0.19+ uses Apple's MLX framework on Apple Silicon, giving a major speed boost over the old llama.cpp backend.
+
+```bash
+# Install
+brew install ollama
+
+# Pull and run Gemma 4 26B-A4B
+ollama serve &
+ollama pull gemma4:26b-a4b
+ollama run gemma4:26b-a4b
+
+# Or use the script:
+./start-ollama-mac.sh              # default: 26b-a4b
+./start-ollama-mac.sh 31b          # dense 31B
+./start-ollama-mac.sh e4b          # lightweight 4.5B
+```
+
+Claude Code integration:
+```bash
+ANTHROPIC_BASE_URL=http://localhost:11434/v1 \
+ANTHROPIC_AUTH_TOKEN=local \
+claude --model openai/gemma4:26b-a4b
+```
+
+### vllm-mlx (recommended for Claude Code)
+
+vllm-mlx exposes a native Anthropic `/v1/messages` endpoint — no LiteLLM proxy or `openai/` prefix needed.
+
+```bash
+# Install
+pip install git+https://github.com/AnyLLM/vllm-mlx.git
+
+# Serve Gemma 4 26B-A4B
+vllm-mlx serve mlx-community/gemma-4-26B-A4B-it-4bit --port 8000
+
+# Or use the script:
+./start-vllm-mlx-mac.sh            # default: 26b-a4b
+./start-vllm-mlx-mac.sh 31b        # dense 31B
+./start-vllm-mlx-mac.sh e4b        # lightweight 4.5B
+```
+
+Claude Code integration (cleanest — native Anthropic API):
+```bash
+ANTHROPIC_BASE_URL=http://localhost:8000 \
+ANTHROPIC_API_KEY=local \
+claude
+```
 
 ## Supported Flows
 
@@ -176,9 +427,12 @@ Flow 3: Cursor (Chat/Cmd+K only — Agent mode unsupported)
 
 | Script | Flow | Platform | What it does |
 |--------|------|----------|-------------|
-| `start-server.sh` | All | Linux/WSL | Start llama-server (default: Qwen3.5-9B, or `./start-server.sh nemotron`) |
-| `start-server-mac.sh` | All | macOS | Start llama-server (auto-picks 35B-A3B or 9B based on RAM) |
-| `start-claude-local.sh` | 1 | Any | Launch Claude Code with local Qwen (auto-detects model) |
+| `start-server.sh` | All | Linux/WSL | Start llama-server (`9b`, `nemotron`, `gemma4-26b`, `gemma4-31b`, `gemma4-e4b`) |
+| `start-server-mac.sh` | All | macOS | Start llama-server (`9b`, `35b-a3b`, `27b`, `gemma4-26b`, `gemma4-31b`, `gemma4-e4b`) |
+| `start-tabby.sh` | 1 | Linux/WSL | Start TabbyAPI + ExLlamaV3 (`4bpw`, `5bpw`, `6bpw`) |
+| `start-ollama-mac.sh` | 1 | macOS | Start Ollama with Gemma 4 (`26b-a4b`, `31b`, or `e4b`) |
+| `start-vllm-mlx-mac.sh` | 1 | macOS | Start vllm-mlx with Gemma 4 (native Anthropic API) |
+| `start-claude-local.sh` | 1 | Any | Launch Claude Code with local model (auto-detects) |
 | `start-remote.sh` | 2 | Linux/WSL | Tunnel llama-server for remote access |
 | `start-cursor-local.sh` | 3 | Linux/WSL | LiteLLM proxy + tunnel for Cursor |
 | `stop-all.sh` | — | Any | Kill everything |
@@ -291,15 +545,17 @@ Best for tab completion with local models:
 
 ## Model Selection Guide
 
-| Memory | Recommended Model | Type | Q4_K_M Size | Tok/s (approx) | Quality Tier |
-|--------|-------------------|------|-------------|-----------------|-------------|
+| Memory | Recommended Model | Type | Q4 Size | Tok/s (approx) | Quality Tier |
+|--------|-------------------|------|---------|-----------------|-------------|
 | 8GB VRAM | Qwen3.5-9B | Dense | 5.3GB | ~43-65 | Haiku |
 | 8GB VRAM | Nemotron 3 Nano 4B (alt) | Hybrid Mamba-2 | ~2.5GB | faster* | Below Haiku |
 | 12GB VRAM | Qwen3.5-9B | Dense | 5.3GB | ~43-65 | Haiku |
 | 16GB VRAM | Qwen3.5-9B | Dense | 5.3GB | ~43-65 | Haiku |
 | 24GB VRAM | Qwen3.5-27B | Dense | 16GB | ~30 | Sonnet-ish |
+| 24GB VRAM | Gemma 4 26B-A4B | MoE | 16.9GB | TBD | TBD |
 | 32GB+ (Apple Silicon) | **Qwen3.5-35B-A3B** | **MoE** | **22GB** | **~29** | **Sonnet 4.5** |
-| 36GB+ (Apple Silicon) | **Qwen3.5-35B-A3B** | **MoE** | **22GB** | **~29** | **Sonnet 4.5** |
+| 32GB+ (Apple Silicon) | **Gemma 4 26B-A4B** | **MoE** | **16.9GB** | **TBD** | **TBD** |
+| 36GB+ (Apple Silicon) | Gemma 4 31B | Dense | 18.3GB | TBD | TBD |
 
 \*Nemotron 3 Nano 4B uses a hybrid Mamba-2 + Transformer architecture (mostly Mamba-2 layers with just 4 attention layers). It's significantly faster than the 9B, uses only ~5GB VRAM, and supports 262K context. The tradeoff is lower coding quality — it's designed for edge agents and local assistants rather than deep reasoning. Use it when you want maximum speed or need the longer context window. Run it with `./start-server.sh nemotron`.
 
@@ -347,13 +603,40 @@ swap=8GB
 ```
 Then restart WSL: `wsl --shutdown`
 
+## What's Next: TurboQuant (KV Cache Compression)
+
+Google's [TurboQuant](https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/) (ICLR 2026) compresses the KV cache to 3 bits with zero accuracy loss. This matters for local inference because token generation is **memory bandwidth bound** — every token reads the entire KV cache. Smaller cache = less data to read = faster tok/s.
+
+We currently use `--cache-type-k q4_0 --cache-type-v q4_0` (4-bit KV cache). Once TurboQuant lands in llama.cpp, switching to 3-bit cache would give us:
+
+- **Faster generation** — ~25% less data to read per token during attention
+- **Higher quality quants** — freed VRAM means you could use Q5_K_M or Q6_K instead of Q4_K_M for model weights, getting better output at the same VRAM budget
+- **Longer context** — the 9B model could feasibly run 262K context on 12GB VRAM instead of being limited to 131K
+
+| Scenario | Current (q4_0 cache) | With TurboQuant (3-bit cache) |
+|---|---|---|
+| Qwen 9B + 131K on 12GB | Q4_K_M, ~65 tok/s | Could use Q6_K, faster attention |
+| Qwen 9B + 262K on 12GB | OOM | Feasible |
+| Nemotron 4B + 262K on 8GB | Tight | Comfortable |
+
+**Status (April 2026):**
+- **Merged:** [PR #21038](https://github.com/ggml-org/llama.cpp/pull/21038) — Hadamard rotation before KV caching (the core TurboQuant idea). Works on all backends including Metal and CUDA. Makes existing `q4_0` cache more accurate at the same memory footprint — a free quality upgrade when you update llama.cpp.
+- **In review:** [PR #21089](https://github.com/ggml-org/llama.cpp/pull/21089) — Actual 3-bit KV cache types (TBQ3_0/TBQ4_0). CPU-only so far — CUDA support is being developed, Metal support not yet started. When it merges with GPU support, it's a free upgrade — just change the `--cache-type-k` and `--cache-type-v` flags.
+- **Caveat:** Symmetric TurboQuant degrades quality on Qwen models. Asymmetric configs (q8_0 for K, turbo3 for V) are recommended when TBQ types land.
+
 ## Credits
 
 - [@sudoingX](https://x.com/sudoingX) for the optimized llama-server flags and Qwen3.5 benchmarks
 - [llama.cpp](https://github.com/ggml-org/llama.cpp) by ggml-org
 - [Qwen3.5](https://github.com/QwenLM/Qwen3.5) by Alibaba Qwen team
+- [Gemma 4](https://ai.google.dev/gemma) by Google DeepMind
 - [Nemotron 3 Nano](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16) by NVIDIA
 - [unsloth](https://huggingface.co/unsloth) for GGUF quantizations
+- [mlx-community](https://huggingface.co/mlx-community) for MLX quantizations
+- [vllm-mlx](https://github.com/AnyLLM/vllm-mlx) for MLX inference with Anthropic API
+- [Ollama](https://ollama.com/) for easy local model management
+- [ExLlamaV3](https://github.com/turboderp-org/exllamav3) + [TabbyAPI](https://github.com/theroyallab/tabbyAPI) for fast CUDA inference
+- [TensorRT-LLM](https://github.com/NVIDIA/TensorRT-LLM) by NVIDIA for optimized engine compilation
 - [LiteLLM](https://github.com/BerriAI/litellm) for the proxy workaround
 
 ## License

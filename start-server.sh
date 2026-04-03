@@ -1,6 +1,6 @@
 #!/bin/bash
-# Start llama-server with Qwen3.5-9B or Nemotron 3 Nano 4B
-# Usage: ./start-server.sh [9b|nemotron]
+# Start llama-server with Qwen3.5 or Gemma 4 models
+# Usage: ./start-server.sh [9b|nemotron|gemma4-26b|gemma4-31b|gemma4-e4b]
 
 set -e
 
@@ -19,6 +19,32 @@ case "$MODEL_CHOICE" in
     MODEL_SIZE="2.5GB"
     MODEL_ALIAS="nemotron-3-nano-4b"
     CONTEXT=262144
+    ;;
+  gemma4-26b)
+    MODEL_PATH="$HOME/models/gemma-4-26B-A4B-it-Q4_K_M.gguf"
+    MODEL_REPO="unsloth/gemma-4-26B-A4B-it-GGUF"
+    MODEL_FILE="gemma-4-26B-A4B-it-Q4_K_M.gguf"
+    MODEL_SIZE="16.9GB"
+    MODEL_ALIAS="gemma-4-26b-a4b"
+    CONTEXT=131072
+    echo "Note: Gemma 4 26B-A4B is MoE (4B active) — fits 12GB VRAM but needs ~17GB download"
+    ;;
+  gemma4-31b)
+    MODEL_PATH="$HOME/models/gemma-4-31B-it-Q4_K_M.gguf"
+    MODEL_REPO="unsloth/gemma-4-31B-it-GGUF"
+    MODEL_FILE="gemma-4-31B-it-Q4_K_M.gguf"
+    MODEL_SIZE="18.3GB"
+    MODEL_ALIAS="gemma-4-31b"
+    CONTEXT=65536
+    echo "Warning: Gemma 4 31B dense needs ~18GB — may OOM on 12GB VRAM. Reduce context if needed."
+    ;;
+  gemma4-e4b)
+    MODEL_PATH="$HOME/models/gemma-4-E4B-it-Q4_K_M.gguf"
+    MODEL_REPO="unsloth/gemma-4-E4B-it-GGUF"
+    MODEL_FILE="gemma-4-E4B-it-Q4_K_M.gguf"
+    MODEL_SIZE="5GB"
+    MODEL_ALIAS="gemma-4-e4b"
+    CONTEXT=131072
     ;;
   9b|*)
     MODEL_PATH="$HOME/models/Qwen3.5-9B-Q4_K_M.gguf"

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Start llama-server on macOS (Apple Silicon)
-# Usage: ./start-server-mac.sh [9b|35b-a3b|27b]
+# Usage: ./start-server-mac.sh [9b|35b-a3b|27b|gemma4-26b|gemma4-31b|gemma4-e4b]
 #
 # Defaults to 35B-A3B (MoE) on 32GB+ RAM, 9B otherwise.
 # The 35B-A3B activates only 3B params per token — faster AND smarter than the dense 27B.
@@ -37,6 +37,21 @@ elif [ "$MODEL_SIZE" = "27b" ]; then
   MODEL_REPO="unsloth/Qwen3.5-27B-GGUF"
   CONTEXT=131072
   echo "Using Qwen3.5-27B (dense — consider 35B-A3B instead for better speed)"
+elif [ "$MODEL_SIZE" = "gemma4-26b" ]; then
+  MODEL_NAME="gemma-4-26B-A4B-it-Q4_K_M.gguf"
+  MODEL_REPO="unsloth/gemma-4-26B-A4B-it-GGUF"
+  CONTEXT=131072
+  echo "Using Gemma 4 26B-A4B MoE (4B active, ~17GB)"
+elif [ "$MODEL_SIZE" = "gemma4-31b" ]; then
+  MODEL_NAME="gemma-4-31B-it-Q4_K_M.gguf"
+  MODEL_REPO="unsloth/gemma-4-31B-it-GGUF"
+  CONTEXT=131072
+  echo "Using Gemma 4 31B (dense, ~18GB — may swap on 36GB)"
+elif [ "$MODEL_SIZE" = "gemma4-e4b" ]; then
+  MODEL_NAME="gemma-4-E4B-it-Q4_K_M.gguf"
+  MODEL_REPO="unsloth/gemma-4-E4B-it-GGUF"
+  CONTEXT=131072
+  echo "Using Gemma 4 E4B (~5GB — fast but lower quality)"
 else
   MODEL_NAME="Qwen3.5-9B-Q4_K_M.gguf"
   MODEL_REPO="unsloth/Qwen3.5-9B-GGUF"
