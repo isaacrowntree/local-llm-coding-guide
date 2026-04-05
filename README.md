@@ -17,7 +17,7 @@ Tested on:
 | M3 Pro 36GB | **Qwen3.5-35B-A3B Q4_K_M** | **~29 tok/s** | 131K | **~22GB** |
 | M3 Pro 36GB | Qwen3.5-9B Q4_K_M | ~20 tok/s | 131K | ~7GB |
 | M3 Pro 36GB | Qwen3.5-27B Q4_K_M | ~9 tok/s* | 131K | ~18GB |
-| M3 Pro 36GB | Gemma 4 26B-A4B Q4_K_M | TBD | 256K | ~17GB |
+| M3 Pro 36GB | **Gemma 4 26B-A4B Q4_K_M (Ollama MLX)** | **~31 tok/s** | 256K | **~17GB** |
 | M3 Pro 36GB | Gemma 4 31B Q4_K_M | TBD | 256K | ~18GB |
 
 *The dense 27B model is slower than the 35B-A3B on 36GB machines due to higher memory bandwidth requirements. The 35B-A3B (MoE) is faster *and* smarter — see [Why MoE?](#why-moe-mixture-of-experts) below.
@@ -349,26 +349,30 @@ TRT-LLM's advantage grows with batched/concurrent inference. For single-user cod
 
 ## Inference Engines (macOS Apple Silicon)
 
-llama.cpp is the default, but MLX-based engines can be significantly faster on Apple Silicon.
+**Ollama (MLX) is recommended for macOS.** llama.cpp has an [open bug](https://github.com/ggml-org/llama.cpp/issues/21321) where Gemma 4 outputs only thinking tokens (`<unused25>`) — use Ollama until this is fixed.
 
 | Engine | Decode Speed | Prefill Speed | Format | Claude Code API | Setup |
 |--------|-------------|---------------|--------|-----------------|-------|
-| **llama.cpp** | Baseline | Fast | GGUF | OpenAI (needs `openai/` prefix) | `brew install llama.cpp` |
-| **Ollama 0.19+** | ~93% faster (MLX backend) | ~57% faster | Auto (GGUF/MLX) | OpenAI | `brew install ollama` |
-| **vllm-mlx** | MLX-native | Good | MLX | **Native Anthropic** (no proxy) | `pip install` from git |
+| **Ollama 0.20+** | **~31 tok/s (tested)** | **~99 tok/s** | Auto (MLX) | OpenAI | `brew install ollama` |
+| llama.cpp | ~29 tok/s (Qwen only) | ~70 tok/s | GGUF | OpenAI (needs `openai/` prefix) | `brew install llama.cpp` |
+| vllm-mlx | MLX-native | Good | MLX | **Native Anthropic** (no proxy) | `pip install` from git |
 
-### Ollama (recommended for ease of use)
+> **Note:** llama.cpp works fine with Qwen3.5 models on Mac. The thinking token bug only affects Gemma 4.
 
-Ollama 0.19+ uses Apple's MLX framework on Apple Silicon, giving a major speed boost over the old llama.cpp backend.
+### Ollama (recommended for macOS)
+
+Ollama 0.20+ uses Apple's MLX framework on Apple Silicon. It handles Gemma 4's thinking tokens correctly and delivers ~31 tok/s generation / ~99 tok/s prefill on M3 Pro 36GB.
 
 ```bash
 # Install
 brew install ollama
 
-# Pull and run Gemma 4 26B-A4B
-ollama serve &
-ollama pull gemma4:26b-a4b
-ollama run gemma4:26b-a4b
+# Start the server
+OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q4_0 ollama serve &
+
+# Pull and run Gemma 4 26B-A4B (~17GB download)
+ollama pull gemma4:26b-a4b-it-q4_K_M
+ollama run gemma4:26b-a4b-it-q4_K_M
 
 # Or use the script:
 ./start-ollama-mac.sh              # default: 26b-a4b
@@ -380,7 +384,7 @@ Claude Code integration:
 ```bash
 ANTHROPIC_BASE_URL=http://localhost:11434/v1 \
 ANTHROPIC_AUTH_TOKEN=local \
-claude --model openai/gemma4:26b-a4b
+claude --model openai/gemma4:26b-a4b-it-q4_K_M
 ```
 
 ### vllm-mlx (recommended for Claude Code)
@@ -412,6 +416,7 @@ claude
 ```
 Flow 1: Claude Code (local)
   Claude Code -> localhost:8080 -> llama-server (Qwen3.5)
+  Claude Code -> localhost:11434 -> Ollama MLX (Gemma 4)
   No extras needed. Just env vars.
 
 Flow 2: Claude Code (remote, e.g. from MacBook)
@@ -553,9 +558,9 @@ Best for tab completion with local models:
 | 16GB VRAM | Qwen3.5-9B | Dense | 5.3GB | ~43-65 | Haiku |
 | 24GB VRAM | Qwen3.5-27B | Dense | 16GB | ~30 | Sonnet-ish |
 | 24GB VRAM | Gemma 4 26B-A4B | MoE | 16.9GB | TBD | TBD |
-| 32GB+ (Apple Silicon) | **Qwen3.5-35B-A3B** | **MoE** | **22GB** | **~29** | **Sonnet 4.5** |
-| 32GB+ (Apple Silicon) | **Gemma 4 26B-A4B** | **MoE** | **16.9GB** | **TBD** | **TBD** |
-| 36GB+ (Apple Silicon) | Gemma 4 31B | Dense | 18.3GB | TBD | TBD |
+| 32GB+ (Apple Silicon) | **Qwen3.5-35B-A3B** | **MoE** | **22GB** | **~29 (llama.cpp)** | **Sonnet 4.5** |
+| 32GB+ (Apple Silicon) | **Gemma 4 26B-A4B** | **MoE** | **17GB** | **~31 (Ollama MLX)** | **Sonnet 4.5** |
+| 36GB+ (Apple Silicon) | Gemma 4 31B | Dense | 20GB | TBD | TBD |
 
 \*Nemotron 3 Nano 4B uses a hybrid Mamba-2 + Transformer architecture (mostly Mamba-2 layers with just 4 attention layers). It's significantly faster than the 9B, uses only ~5GB VRAM, and supports 262K context. The tradeoff is lower coding quality — it's designed for edge agents and local assistants rather than deep reasoning. Use it when you want maximum speed or need the longer context window. Run it with `./start-server.sh nemotron`.
 
@@ -581,6 +586,9 @@ Check `memory_pressure` — if free memory is below 20%, you're swap-thrashing. 
 
 ### Slow prompt processing
 Make sure all layers are on GPU (`offloaded N/N layers to GPU` in logs). If not, reduce context or use a smaller quant.
+
+### Gemma 4 outputs `<unused25>` garbage in llama.cpp
+Known bug ([#21321](https://github.com/ggml-org/llama.cpp/issues/21321)). Gemma 4 gets stuck generating thinking tokens that llama.cpp doesn't filter correctly. **Workaround: use Ollama instead of llama.cpp for Gemma 4 on Mac.** Ollama's MLX backend handles the thinking tokens correctly. Qwen3.5 models are unaffected.
 
 ### Ollama CUDA crashes with MoE models
 Known bug ([#14444](https://github.com/ollama/ollama/issues/14444)). Use llama.cpp directly instead of ollama for Qwen3.5 MoE models.

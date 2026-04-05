@@ -2,8 +2,10 @@
 # Start Ollama with Gemma 4 on macOS (Apple Silicon)
 # Usage: ./start-ollama-mac.sh [26b-a4b|31b|e4b]
 #
-# Ollama 0.19+ uses MLX on Apple Silicon — ~93% faster decode than the old llama.cpp backend.
-# Defaults to Gemma 4 26B-A4B (MoE, 4B active params, 16.9GB Q4).
+# Ollama 0.20+ uses MLX on Apple Silicon — ~31 tok/s generation, ~99 tok/s prefill on M3 Pro.
+# Defaults to Gemma 4 26B-A4B (MoE, 4B active params, ~17GB Q4_K_M).
+#
+# Note: Use Ollama (not llama.cpp) for Gemma 4 on Mac — llama.cpp has a thinking token bug.
 
 set -e
 
@@ -14,16 +16,16 @@ LOG="/tmp/ollama.log"
 MODEL_SIZE="${1:-26b-a4b}"
 case "$MODEL_SIZE" in
   31b)
-    MODEL="gemma4:31b"
-    echo "Using Gemma 4 31B (dense, ~18.3GB — tight on 36GB, may swap)"
+    MODEL="gemma4:31b-it-q4_K_M"
+    echo "Using Gemma 4 31B (dense, ~20GB — tight on 36GB, may swap)"
     ;;
   e4b)
-    MODEL="gemma4:e4b"
-    echo "Using Gemma 4 E4B (dense, ~5GB — fast but lower quality)"
+    MODEL="gemma4:e4b-it-q4_K_M"
+    echo "Using Gemma 4 E4B (dense, ~9.6GB — fast but lower quality)"
     ;;
   26b-a4b|*)
-    MODEL="gemma4:26b-a4b"
-    echo "Using Gemma 4 26B-A4B MoE (recommended — 4B active, ~16.9GB)"
+    MODEL="gemma4:26b-a4b-it-q4_K_M"
+    echo "Using Gemma 4 26B-A4B MoE (recommended — 4B active, ~17GB, ~31 tok/s)"
     ;;
 esac
 
@@ -33,14 +35,14 @@ if ! command -v ollama &> /dev/null; then
   brew install ollama
 fi
 
-# Check version (need 0.19+ for MLX backend)
+# Check version
 OLLAMA_VERSION=$(ollama --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1)
 echo "Ollama version: $OLLAMA_VERSION"
 
 # Start ollama serve if not already running
 if ! curl -s "http://localhost:$PORT/api/tags" > /dev/null 2>&1; then
-  echo "Starting Ollama server..."
-  ollama serve > "$LOG" 2>&1 &
+  echo "Starting Ollama server with flash attention and q4_0 KV cache..."
+  OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q4_0 ollama serve > "$LOG" 2>&1 &
   sleep 3
 fi
 
