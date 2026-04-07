@@ -10,8 +10,9 @@ Tested on:
 
 | GPU | Model | Tok/s | Context | Memory Used |
 |-----|-------|-------|---------|-------------|
+| RTX 4070 Ti 12GB | **Gemma 4 E4B Q4_K_M** | **~94 tok/s** | 131K | **5.7GB** |
 | RTX 4070 Ti 12GB | Nemotron 3 Nano 4B Q4_K_M | TBD | 262K | ~5GB |
-| RTX 4070 Ti 12GB | Qwen3.5-9B Q4_K_M | ~65 tok/s | 131K | 7.8GB |
+| RTX 4070 Ti 12GB | Qwen3.5-9B Q4_K_M | ~65-78 tok/s | 131K | 8.2GB |
 | RTX 3060 12GB | Qwen3.5-9B Q4_K_M | ~43 tok/s | 128K | ~7.8GB |
 | RTX 3090 24GB | Qwen3.5-27B Q4_K_M | ~30 tok/s | 262K | ~18GB |
 | M3 Pro 36GB | **Qwen3.6-35B-A3B Q4_K_M (Ollama MLX)** | **~35 tok/s** | 262K | **~22GB** |
@@ -69,7 +70,12 @@ Same MoE shape as Qwen 3.5 35B-A3B (35B total / 3B active per token, ~22GB at Q4
 huggingface-cli download unsloth/Qwen3.5-35B-A3B-GGUF Qwen3.5-35B-A3B-Q4_K_M.gguf --local-dir ./models
 ```
 
-**For NVIDIA GPUs (8-12GB VRAM):**
+**For NVIDIA GPUs (8-12GB VRAM) — Gemma 4 E4B (recommended):**
+```bash
+huggingface-cli download unsloth/gemma-4-E4B-it-GGUF gemma-4-E4B-it-Q4_K_M.gguf --local-dir ./models
+```
+
+**For NVIDIA GPUs (8-12GB VRAM) — Qwen3.5-9B (alternative):**
 ```bash
 huggingface-cli download unsloth/Qwen3.5-9B-GGUF Qwen3.5-9B-Q4_K_M.gguf --local-dir ./models
 ```
@@ -110,7 +116,7 @@ huggingface-cli download unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF NVIDIA-Nemotron-
 **Linux/WSL (NVIDIA GPU):**
 ```bash
 ./llama-server \
-  -m models/Qwen3.5-9B-Q4_K_M.gguf \
+  -m models/gemma-4-E4B-it-Q4_K_M.gguf \
   --host 0.0.0.0 --port 8080 \
   -ngl 99 \
   -c 131072 \
@@ -164,7 +170,7 @@ MoE models have more total parameters but only **activate a fraction per token**
 | Model | Total Params | Active Params | Q4 Size | Context | Quality Tier |
 |-------|-------------|---------------|---------|---------|-------------|
 | Nemotron 3 Nano 4B | 4B | 4B (hybrid Mamba-2) | ~2.5GB | 262K | Below Haiku (edge/agent) |
-| Gemma 4 E4B | 8B | 4.5B (dense) | ~5GB | 128K | TBD |
+| **Gemma 4 E4B** | **8B** | **~2B (MoE)** | **4.7GB** | **131K** | **Haiku+ (fast)** |
 | Qwen3.5-9B | 9B | 9B (dense) | 5.3GB | 131K | GPT-4o-mini / Haiku |
 | Qwen3.5-27B | 27B | 27B (dense) | 16GB | 131K | Sonnet-ish |
 | **Gemma 4 26B-A4B** | **26B** | **4B (MoE)** | **16.9GB** | **256K** | **TBD** |
@@ -196,8 +202,10 @@ llama.cpp is the reliable default. ExLlamaV3 + TabbyAPI is ~50-60% faster using 
 |--------|-------------------|--------|----------|-------|
 | **ExLlamaV3 + TabbyAPI** | **~100-130** | EXL3 (CUDA-only) | Not yet | `git clone` + `start.sh` |
 | **TensorRT-LLM** | **~80-95** | TRT engine / HF | Not yet | Docker container |
-| **llama.cpp** | ~65 | GGUF (universal) | Yes (day-0) | Build or download binary |
+| **llama.cpp** | ~65-94* | GGUF (universal) | Yes (day-0) | Build or download binary |
 | Ollama | ~62 | GGUF (llama.cpp backend) | Yes | `brew install ollama` |
+
+\*94 tok/s with Gemma 4 E4B (MoE, ~2B active), 65-78 tok/s with Qwen3.5-9B (dense).
 
 **Why two formats?** GGUF is universal (CUDA, Metal, CPU, Vulkan) using generic compute kernels. EXL3 trades portability for speed — it uses hand-tuned CUDA kernels optimized for NVIDIA memory hierarchy, so it only runs on NVIDIA GPUs but is significantly faster.
 
@@ -360,9 +368,10 @@ claude --model qwen
 | Engine | ~Tok/s | Notes |
 |--------|--------|-------|
 | ExLlamaV3 (EXL3) | ~100-130 | Custom CUDA kernels, single-user champion |
+| **llama.cpp (Gemma 4 E4B)** | **~94** | **MoE model closes the gap with EXL3** |
 | TensorRT-LLM (TRT engine) | ~80-95 | GPU-specific compiled graph, higher VRAM overhead |
 | TensorRT-LLM (PyTorch) | ~75-85 | No build step, good middle ground |
-| llama.cpp (GGUF) | ~65 | Universal format, broadest compatibility |
+| llama.cpp (Qwen3.5-9B) | ~65-78 | Dense model, broadest compatibility |
 
 TRT-LLM's advantage grows with batched/concurrent inference. For single-user coding, ExLlamaV3 may match or exceed it due to its hand-tuned decode kernels. TRT-LLM becomes the clear winner when serving multiple users or running longer-context workloads where its compiled attention kernels shine.
 
@@ -597,10 +606,12 @@ Best for tab completion with local models:
 
 | Memory | Recommended Model | Type | Q4 Size | Tok/s (approx) | Quality Tier |
 |--------|-------------------|------|---------|-----------------|-------------|
-| 8GB VRAM | Qwen3.5-9B | Dense | 5.3GB | ~43-65 | Haiku |
+| 8GB VRAM | **Gemma 4 E4B** | **MoE** | **4.7GB** | **~94** | **Haiku+ (fast)** |
+| 8GB VRAM | Qwen3.5-9B (alt) | Dense | 5.3GB | ~43-65 | Haiku |
 | 8GB VRAM | Nemotron 3 Nano 4B (alt) | Hybrid Mamba-2 | ~2.5GB | faster* | Below Haiku |
-| 12GB VRAM | Qwen3.5-9B | Dense | 5.3GB | ~43-65 | Haiku |
-| 16GB VRAM | Qwen3.5-9B | Dense | 5.3GB | ~43-65 | Haiku |
+| 12GB VRAM | **Gemma 4 E4B** | **MoE** | **4.7GB** | **~94** | **Haiku+ (fast)** |
+| 12GB VRAM | Qwen3.5-9B (alt) | Dense | 5.3GB | ~65-78 | Haiku |
+| 16GB VRAM | **Gemma 4 E4B** | **MoE** | **4.7GB** | **~94** | **Haiku+ (fast)** |
 | 24GB VRAM | Qwen3.5-27B | Dense | 16GB | ~30 | Sonnet-ish |
 | 24GB VRAM | Gemma 4 26B-A4B | MoE | 16.9GB | TBD | TBD |
 | 32GB+ (Apple Silicon) | **Qwen3.6-35B-A3B** | **MoE** | **22GB** | **~35 (Ollama) / ~48 (mlx-lm)** | **Sonnet 4.5+ (73.4% SWE-bench)** |
@@ -621,7 +632,9 @@ The **Qwen3.6-35B-A3B** (April 2026) closes the gap further: **73.4% SWE-bench V
 
 The **Qwen3.5-35B-A3B** sits roughly in the **Sonnet 4.5 tier** — it beats Sonnet 4.5 on instruction following (IFBench) and is competitive on coding benchmarks.
 
-The **Qwen3.5-9B** sits in the **GPT-4o-mini / Haiku tier**. Good for fast completions, quick edits, boilerplate, and explanations.
+The **Gemma 4 E4B** is the new speed champion for 8-16GB NVIDIA GPUs — ~94 tok/s at just 5.7GB VRAM. Quality is comparable to the 9B dense models on standard coding tasks, though the smaller active parameter count (~2B) means it may underperform on complex multi-step reasoning.
+
+The **Qwen3.5-9B** sits in the **GPT-4o-mini / Haiku tier**. Good for fast completions, quick edits, boilerplate, and explanations. Slightly better quality than Gemma 4 E4B on harder tasks, but ~30% slower.
 
 All of these still fall short of Claude Opus 4.7 on long-horizon agentic workflows, multi-file refactors, and deep reasoning. Best strategy: route the daily 70-80% of edits to a local model and reserve Opus for the hard 20%.
 
@@ -640,7 +653,7 @@ Make sure all layers are on GPU (`offloaded N/N layers to GPU` in logs). If not,
 Known bug ([#21321](https://github.com/ggml-org/llama.cpp/issues/21321)). Gemma 4 gets stuck generating thinking tokens that llama.cpp doesn't filter correctly. **Workaround: use Ollama instead of llama.cpp for Gemma 4 on Mac.** Ollama's MLX backend handles the thinking tokens correctly. Qwen3.5 models are unaffected.
 
 ### Ollama CUDA crashes with MoE models
-Known bug ([#14444](https://github.com/ollama/ollama/issues/14444)). Use llama.cpp directly instead of ollama for Qwen3.5 MoE models.
+~~Known bug ([#14444](https://github.com/ollama/ollama/issues/14444)).~~ **Fixed in Ollama v0.17.5.** Ollama now works with MoE models (Qwen3.5 and Gemma 4) on NVIDIA GPUs. Update to v0.17.5+ if you hit this.
 
 ### Cursor SSRF blocked
 Cursor routes requests through their servers and blocks localhost/private IPs. Use cloudflared or ngrok to create a public HTTPS tunnel.
@@ -718,7 +731,8 @@ We currently use `--cache-type-k q4_0 --cache-type-v q4_0` (4-bit KV cache). Onc
 **Status (April 2026):**
 - **Merged:** [PR #21038](https://github.com/ggml-org/llama.cpp/pull/21038) — Hadamard rotation before KV caching (the core TurboQuant idea). Works on all backends including Metal and CUDA. Makes existing `q4_0` cache more accurate at the same memory footprint — a free quality upgrade when you update llama.cpp.
 - **In review:** [PR #21089](https://github.com/ggml-org/llama.cpp/pull/21089) — Actual 3-bit KV cache types (TBQ3_0/TBQ4_0). CPU-only so far — CUDA support is being developed, Metal support not yet started. When it merges with GPU support, it's a free upgrade — just change the `--cache-type-k` and `--cache-type-v` flags.
-- **Caveat:** Symmetric TurboQuant degrades quality on Qwen models. Asymmetric configs (q8_0 for K, turbo3 for V) are recommended when TBQ types land.
+- **Caveat:** Symmetric TurboQuant degrades quality on Qwen models. K compression (not V) drives the quality loss — Qwen models have a 10-60x K/V magnitude ratio. Asymmetric configs (q8_0 for K, turbo3 for V) are recommended when TBQ types land.
+- **Community forks with GPU support:** [turboquant_plus](https://github.com/TheTom/turboquant_plus) has experimental Metal, CUDA, and HIP support for turbo2/turbo3/turbo4 types. Benchmarks show turbo4 adds only +0.23% PPL vs q8_0 baseline, and turbo3 adds +1.06%. If you want to try TurboQuant on GPU before official support lands, this is the most complete fork.
 
 ## Tangential: Hybrid Local + Cloud Agents
 
