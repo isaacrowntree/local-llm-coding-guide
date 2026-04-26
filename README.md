@@ -10,7 +10,8 @@ Tested on:
 
 | GPU | Model | Tok/s | Context | Memory Used |
 |-----|-------|-------|---------|-------------|
-| RTX 4070 Ti 12GB | **Gemma 4 E4B Q4_K_M** | **~94 tok/s** | 131K | **5.7GB** |
+| RTX 4070 Ti 12GB | **Qwen3.6-35B-A3B UD-IQ2_M** | **~30-38 tok/s** | **57K** | **11.9GB** |
+| RTX 4070 Ti 12GB | **Gemma 4 E4B Q4_K_M** | **~94 tok/s** | 131K | **5.0GB** |
 | RTX 4070 Ti 12GB | Nemotron 3 Nano 4B Q4_K_M | TBD | 262K | ~5GB |
 | RTX 4070 Ti 12GB | Qwen3.5-9B Q4_K_M | ~65-78 tok/s | 131K | 8.2GB |
 | RTX 3060 12GB | Qwen3.5-9B Q4_K_M | ~43 tok/s | 128K | ~7.8GB |
@@ -70,7 +71,12 @@ Same MoE shape as Qwen 3.5 35B-A3B (35B total / 3B active per token, ~22GB at Q4
 huggingface-cli download unsloth/Qwen3.5-35B-A3B-GGUF Qwen3.5-35B-A3B-Q4_K_M.gguf --local-dir ./models
 ```
 
-**For NVIDIA GPUs (8-12GB VRAM) — Gemma 4 E4B (recommended):**
+**For NVIDIA GPUs (12GB VRAM) — Qwen3.6-35B-A3B (Sonnet-class, 8K context):**
+```bash
+huggingface-cli download unsloth/Qwen3.6-35B-A3B-GGUF Qwen3.6-35B-A3B-UD-IQ2_M.gguf --local-dir ./models
+```
+
+**For NVIDIA GPUs (8-12GB VRAM) — Gemma 4 E4B (fast, 131K context):**
 ```bash
 huggingface-cli download unsloth/gemma-4-E4B-it-GGUF gemma-4-E4B-it-Q4_K_M.gguf --local-dir ./models
 ```
@@ -176,7 +182,8 @@ MoE models have more total parameters but only **activate a fraction per token**
 | **Gemma 4 26B-A4B** | **26B** | **4B (MoE)** | **16.9GB** | **256K** | **TBD** |
 | Gemma 4 31B | 31B | 31B (dense) | 18.3GB | 256K | TBD |
 | Qwen3.5-35B-A3B | 35B | 3B (MoE) | 22GB | 131K | Sonnet 4.5 |
-| **Qwen3.6-35B-A3B** | **35B** | **3B (MoE)** | **22GB** | **262K (1M ext.)** | **Sonnet 4.5+ (73.4% SWE-bench)** |
+| **Qwen3.6-35B-A3B** | **35B** | **3B (MoE)** | **22GB (Q4)** | **262K (1M ext.)** | **Sonnet 4.5+ (73.4% SWE-bench)** |
+| **Qwen3.6-35B-A3B (12GB VRAM)** | **35B** | **3B (MoE)** | **11.5GB (IQ2)** | **57K** | **Sonnet-class** |
 
 The 35B-A3B is the sweet spot for Apple Silicon: it's **faster than the 9B** (29 vs 20 tok/s on M3 Pro) because it only computes 3B params per token, yet **smarter than the 27B** because it draws from 35B total parameters. Qwen 3.5 35B-A3B [beat Sonnet 4.5 on several benchmarks](https://venturebeat.com/technology/alibabas-new-open-source-qwen3-5-medium-models-offer-sonnet-4-5-performance); the **Qwen 3.6 35B-A3B** (April 16, 2026) pushes further — 73.4% SWE-bench Verified, 37.0% MCPMark (tool use), and native 262K context extensible to ~1M with YaRN.
 
@@ -609,9 +616,11 @@ Best for tab completion with local models:
 | 8GB VRAM | **Gemma 4 E4B** | **MoE** | **4.7GB** | **~94** | **Haiku+ (fast)** |
 | 8GB VRAM | Qwen3.5-9B (alt) | Dense | 5.3GB | ~43-65 | Haiku |
 | 8GB VRAM | Nemotron 3 Nano 4B (alt) | Hybrid Mamba-2 | ~2.5GB | faster* | Below Haiku |
-| 12GB VRAM | **Gemma 4 E4B** | **MoE** | **4.7GB** | **~94** | **Haiku+ (fast)** |
+| 12GB VRAM | **Qwen3.6-35B-A3B (IQ2)** | **MoE** | **11.5GB** | **~30-38 (57K ctx)** | **Sonnet-class** |
+| 12GB VRAM | **Gemma 4 E4B** | **MoE** | **4.7GB** | **~94 (131K ctx)** | **Haiku+ (fast)** |
 | 12GB VRAM | Qwen3.5-9B (alt) | Dense | 5.3GB | ~65-78 | Haiku |
-| 16GB VRAM | **Gemma 4 E4B** | **MoE** | **4.7GB** | **~94** | **Haiku+ (fast)** |
+| 16GB VRAM | **Qwen3.6-35B-A3B (IQ3)** | **MoE** | **~13GB** | **~30** | **Sonnet-class** |
+| 16GB VRAM | Gemma 4 E4B | MoE | 4.7GB | ~94 | Haiku+ (fast) |
 | 24GB VRAM | Qwen3.5-27B | Dense | 16GB | ~30 | Sonnet-ish |
 | 24GB VRAM | Gemma 4 26B-A4B | MoE | 16.9GB | TBD | TBD |
 | 32GB+ (Apple Silicon) | **Qwen3.6-35B-A3B** | **MoE** | **22GB** | **~35 (Ollama) / ~48 (mlx-lm)** | **Sonnet 4.5+ (73.4% SWE-bench)** |
@@ -632,11 +641,15 @@ The **Qwen3.6-35B-A3B** (April 2026) closes the gap further: **73.4% SWE-bench V
 
 The **Qwen3.5-35B-A3B** sits roughly in the **Sonnet 4.5 tier** — it beats Sonnet 4.5 on instruction following (IFBench) and is competitive on coding benchmarks.
 
-The **Gemma 4 E4B** is the new speed champion for 8-16GB NVIDIA GPUs — ~94 tok/s at just 5.7GB VRAM. Quality is comparable to the 9B dense models on standard coding tasks, though the smaller active parameter count (~2B) means it may underperform on complex multi-step reasoning.
+The **Qwen3.6-35B-A3B** is the first Sonnet-class model that fits on 12GB VRAM — using Unsloth's UD-IQ2_M quantization (adaptive per-layer 2-bit). Despite 11.5GB of model weights, the MoE architecture's shared KV layers keep cache overhead low, allowing up to **57K context** with q4_0 KV cache. Runs at ~30-38 tok/s. On 16GB+ cards, use IQ3 or Q4 quants for better quality and longer context.
+
+The **Gemma 4 E4B** is the speed champion for 8-16GB NVIDIA GPUs — ~94 tok/s at just 5.0GB VRAM with 131K context. Quality is comparable to the 9B dense models on standard coding tasks, though the smaller active parameter count (~2B) means it may underperform on complex multi-step reasoning.
 
 The **Qwen3.5-9B** sits in the **GPT-4o-mini / Haiku tier**. Good for fast completions, quick edits, boilerplate, and explanations. Slightly better quality than Gemma 4 E4B on harder tasks, but ~30% slower.
 
 All of these still fall short of Claude Opus 4.7 on long-horizon agentic workflows, multi-file refactors, and deep reasoning. Best strategy: route the daily 70-80% of edits to a local model and reserve Opus for the hard 20%.
+
+**On 12GB specifically:** use Qwen3.6-35B-A3B for hard problems that need quality, and Gemma 4 E4B for fast edits that need long context.
 
 ## Troubleshooting
 
