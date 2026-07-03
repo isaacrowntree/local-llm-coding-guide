@@ -1,6 +1,6 @@
 # Local LLM Coding Guide
 
-Run local LLMs as a coding assistant on consumer hardware. Supports Qwen3.5 and Gemma 4 via llama.cpp, Ollama (MLX), or vllm-mlx.
+Run local LLMs as a coding assistant on consumer hardware. Supports Qwen3.6, Qwen3.5, and Gemma 4 via llama.cpp, Ollama (MLX), or vllm-mlx.
 
 Tested on:
 - **Windows/WSL2:** RTX 4070 Ti (12GB), Intel Core Ultra 9 285K, 48GB DDR5
@@ -14,10 +14,12 @@ Tested on:
 | RTX 4070 Ti 12GB | Qwen3.5-9B Q4_K_M | ~65 tok/s | 131K | 7.8GB |
 | RTX 3060 12GB | Qwen3.5-9B Q4_K_M | ~43 tok/s | 128K | ~7.8GB |
 | RTX 3090 24GB | Qwen3.5-27B Q4_K_M | ~30 tok/s | 262K | ~18GB |
-| M3 Pro 36GB | **Qwen3.5-35B-A3B Q4_K_M** | **~29 tok/s** | 131K | **~22GB** |
+| M3 Pro 36GB | **Qwen3.6-35B-A3B Q4_K_M** | **TBD (≈Qwen3.5)** | 262K | **~22GB** |
+| M3 Pro 36GB | Qwen3.5-35B-A3B Q4_K_M | ~29 tok/s | 131K | ~22GB |
 | M3 Pro 36GB | Qwen3.5-9B Q4_K_M | ~20 tok/s | 131K | ~7GB |
 | M3 Pro 36GB | Qwen3.5-27B Q4_K_M | ~9 tok/s* | 131K | ~18GB |
 | M3 Pro 36GB | **Gemma 4 26B-A4B Q4_K_M (Ollama MLX)** | **~31 tok/s** | 256K | **~17GB** |
+| M3 Pro 36GB | Gemma 4 31B Q4_K_M (Ollama MLX + MTP) | ~2× baseline | 256K | ~18GB |
 | M3 Pro 36GB | Gemma 4 31B Q4_K_M | TBD | 256K | ~18GB |
 
 *The dense 27B model is slower than the 35B-A3B on 36GB machines due to higher memory bandwidth requirements. The 35B-A3B (MoE) is faster *and* smarter — see [Why MoE?](#why-moe-mixture-of-experts) below.
@@ -47,9 +49,16 @@ cmake --build build -j$(sysctl -n hw.ncpu)
 
 ### 2. Download the model
 
-**For macOS with 32GB+ RAM (recommended):**
+**For macOS with 32GB+ RAM (recommended — Qwen 3.6 is the April 2026 update):**
 ```bash
 pip install huggingface-hub
+huggingface-cli download unsloth/Qwen3.6-35B-A3B-GGUF Qwen3.6-35B-A3B-UD-Q4_K_M.gguf --local-dir ./models
+```
+
+Same MoE shape as Qwen 3.5 35B-A3B (35B total / 3B active per token, ~22GB at Q4_K_M) but with significantly better coding scores — 73.4% on SWE-bench Verified. Drop-in replacement.
+
+**Qwen 3.5 35B-A3B** (still solid, slightly smaller download):
+```bash
 huggingface-cli download unsloth/Qwen3.5-35B-A3B-GGUF Qwen3.5-35B-A3B-Q4_K_M.gguf --local-dir ./models
 ```
 
@@ -78,7 +87,7 @@ huggingface-cli download unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF NVIDIA-Nemotron-
 **macOS (Apple Silicon):**
 ```bash
 ./llama-server \
-  -m models/Qwen3.5-35B-A3B-Q4_K_M.gguf \
+  -m models/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf \
   --host 0.0.0.0 --port 8080 \
   -ngl 99 \
   -c 131072 \
@@ -153,9 +162,10 @@ MoE models have more total parameters but only **activate a fraction per token**
 | Qwen3.5-27B | 27B | 27B (dense) | 16GB | 131K | Sonnet-ish |
 | **Gemma 4 26B-A4B** | **26B** | **4B (MoE)** | **16.9GB** | **256K** | **TBD** |
 | Gemma 4 31B | 31B | 31B (dense) | 18.3GB | 256K | TBD |
-| **Qwen3.5-35B-A3B** | **35B** | **3B (MoE)** | **22GB** | **131K** | **Sonnet 4.5** |
+| Qwen3.5-35B-A3B | 35B | 3B (MoE) | 22GB | 131K | Sonnet 4.5 |
+| **Qwen3.6-35B-A3B** | **35B** | **3B (MoE)** | **22GB** | **262K (1M ext.)** | **Sonnet 4.5+ (73.4% SWE-bench)** |
 
-The 35B-A3B is the sweet spot for Apple Silicon: it's **faster than the 9B** (29 vs 20 tok/s on M3 Pro) because it only computes 3B params per token, yet **smarter than the 27B** because it draws from 35B total parameters. It [beats Sonnet 4.5 on several benchmarks](https://venturebeat.com/technology/alibabas-new-open-source-qwen3-5-medium-models-offer-sonnet-4-5-performance) including instruction following and visual reasoning.
+The 35B-A3B is the sweet spot for Apple Silicon: it's **faster than the 9B** (29 vs 20 tok/s on M3 Pro) because it only computes 3B params per token, yet **smarter than the 27B** because it draws from 35B total parameters. Qwen 3.5 35B-A3B [beat Sonnet 4.5 on several benchmarks](https://venturebeat.com/technology/alibabas-new-open-source-qwen3-5-medium-models-offer-sonnet-4-5-performance); the **Qwen 3.6 35B-A3B** (April 16, 2026) pushes further — 73.4% SWE-bench Verified, 37.0% MCPMark (tool use), and native 262K context extensible to ~1M with YaRN.
 
 **The tradeoff:** MoE models are larger on disk (22GB vs 16GB for the dense 27B) because they store all expert weights even though only a subset is used per token. On machines with limited RAM, the 9B dense model may be the better fit.
 
@@ -356,6 +366,7 @@ TRT-LLM's advantage grows with batched/concurrent inference. For single-user cod
 | **Ollama 0.20+** | **~31 tok/s (tested)** | **~99 tok/s** | Auto (MLX) | OpenAI | `brew install ollama` |
 | llama.cpp | ~29 tok/s (Qwen only) | ~70 tok/s | GGUF | OpenAI (needs `openai/` prefix) | `brew install llama.cpp` |
 | vllm-mlx | MLX-native | Good | MLX | **Native Anthropic** (no proxy) | `pip install` from git |
+| **vLLM Metal v0.2.0+** | **MLX-native, batched** | **83× v0.1 TTFT** | MLX | OpenAI | Docker Desktop 4.62+ |
 
 > **Note:** llama.cpp works fine with Qwen3.5 models on Mac. The thinking token bug only affects Gemma 4.
 
@@ -410,6 +421,22 @@ ANTHROPIC_BASE_URL=http://localhost:8000 \
 ANTHROPIC_API_KEY=local \
 claude
 ```
+
+### vLLM Metal (Docker Model Runner, April 2026)
+
+[vLLM Metal](https://github.com/vllm-project/vllm-metal) is the official vLLM hardware plugin for Apple Silicon — separate project from `vllm-mlx`. v0.2.0 (April 2026) introduced a unified paged varlen Metal kernel as the default attention backend, reporting **83× TTFT** and **3.6× throughput** vs v0.1.0.
+
+Shipping path is via Docker Model Runner on Docker Desktop 4.62+:
+
+```bash
+# Pull an MLX-format model via Docker Model Runner
+docker model pull mlx-community/Qwen3.6-35B-A3B-4bit
+docker model run mlx-community/Qwen3.6-35B-A3B-4bit
+```
+
+OpenAI-compatible endpoint exposed on the local Docker model runtime — point Claude Code at it the same way as Ollama.
+
+> **vllm-mlx vs vLLM Metal:** `vllm-mlx` (waybarrios) is a community fork with native Anthropic API support, MCP tool calling, and SSD-tiered KV cache. `vllm-metal` is the official vLLM plugin via Docker. Pick `vllm-mlx` for Claude Code without a proxy; pick `vLLM Metal` if you already use Docker and want the official path.
 
 ## Supported Flows
 
@@ -558,8 +585,10 @@ Best for tab completion with local models:
 | 16GB VRAM | Qwen3.5-9B | Dense | 5.3GB | ~43-65 | Haiku |
 | 24GB VRAM | Qwen3.5-27B | Dense | 16GB | ~30 | Sonnet-ish |
 | 24GB VRAM | Gemma 4 26B-A4B | MoE | 16.9GB | TBD | TBD |
-| 32GB+ (Apple Silicon) | **Qwen3.5-35B-A3B** | **MoE** | **22GB** | **~29 (llama.cpp)** | **Sonnet 4.5** |
+| 32GB+ (Apple Silicon) | **Qwen3.6-35B-A3B** | **MoE** | **22GB** | **≈Qwen3.5 (TBD)** | **Sonnet 4.5+ (73.4% SWE-bench)** |
+| 32GB+ (Apple Silicon) | Qwen3.5-35B-A3B | MoE | 22GB | ~29 (llama.cpp) | Sonnet 4.5 |
 | 32GB+ (Apple Silicon) | **Gemma 4 26B-A4B** | **MoE** | **17GB** | **~31 (Ollama MLX)** | **Sonnet 4.5** |
+| 36GB+ (Apple Silicon) | Gemma 4 31B (with MTP) | Dense | 20GB | ~2× baseline | TBD |
 | 36GB+ (Apple Silicon) | Gemma 4 31B | Dense | 20GB | TBD | TBD |
 
 \*Nemotron 3 Nano 4B uses a hybrid Mamba-2 + Transformer architecture (mostly Mamba-2 layers with just 4 attention layers). It's significantly faster than the 9B, uses only ~5GB VRAM, and supports 262K context. The tradeoff is lower coding quality — it's designed for edge agents and local assistants rather than deep reasoning. Use it when you want maximum speed or need the longer context window. Run it with `./start-server.sh nemotron`.
@@ -570,11 +599,13 @@ On a 36GB M3 Pro, the dense 27B model uses ~18GB for weights + 2.3GB for KV cach
 
 ### Honest comparison to premium models
 
-The **Qwen3.5-35B-A3B** sits roughly in the **Sonnet 4.5 tier** — it beats Sonnet 4.5 on instruction following (IFBench) and is competitive on coding benchmarks. It handles single-file tasks, refactoring, bug fixes, and test writing well.
+The **Qwen3.6-35B-A3B** (April 2026) closes the gap further: **73.4% SWE-bench Verified**, **51.5% Terminal-Bench 2.0**, **37.0% MCPMark** (tool use). It handles single-file tasks, refactoring, bug fixes, test writing, and short agent loops well — comfortably matching Sonnet 4.5 on coding, with notably better tool/MCP integration than Gemma 4 (37% vs 18.1% MCPMark).
+
+The **Qwen3.5-35B-A3B** sits roughly in the **Sonnet 4.5 tier** — it beats Sonnet 4.5 on instruction following (IFBench) and is competitive on coding benchmarks.
 
 The **Qwen3.5-9B** sits in the **GPT-4o-mini / Haiku tier**. Good for fast completions, quick edits, boilerplate, and explanations.
 
-Both still fall short of Claude Opus or GPT-4.5 on complex multi-step reasoning and autonomous agentic workflows. Best strategy: use local models for quick edits and premium APIs for hard problems.
+All of these still fall short of Claude Opus 4.7 on long-horizon agentic workflows, multi-file refactors, and deep reasoning. Best strategy: route the daily 70-80% of edits to a local model and reserve Opus for the hard 20%.
 
 ## Troubleshooting
 
@@ -611,6 +642,45 @@ swap=8GB
 ```
 Then restart WSL: `wsl --shutdown`
 
+## Multi-Token Prediction (MTP) — 1.5–3× speedup
+
+MTP speculative decoding uses a small "drafter" head to propose multiple tokens at once, which the main model verifies in a single forward pass. Outputs are identical to non-MTP generation — it's pure throughput, no quality loss. Reported speedups: ~2× for Gemma 4 31B coding tasks, 1.5–2.9× for Qwen 3.x models.
+
+### Ollama (Gemma 4 — easiest path)
+
+Ollama added Gemma 4 MTP support via [PR #15980](https://github.com/ollama/ollama/pull/15980). Pre-built MTP models are on the Ollama library:
+
+```bash
+ollama pull gemma4:31b-coding-mtp-bf16
+ollama run gemma4:31b-coding-mtp-bf16
+```
+
+This is the most reliable MTP setup right now — Google ships official drafters, Ollama wires them up automatically. The dense 31B becomes viable on 36GB with this speedup.
+
+### llama.cpp (beta — Qwen 3.x and Gemma 4)
+
+llama.cpp MTP support landed in [PR #22673](https://github.com/ggml-org/llama.cpp/pull/22673), currently beta. You need a build that includes the PR, plus an MTP-bundled GGUF:
+
+```bash
+# Download a community MTP-bundled GGUF (drafter weights baked in)
+huggingface-cli download havenoammo/Qwen3.6-35B-A3B-MTP-GGUF \
+  Qwen3.6-35B-A3B-MTP-UD-Q4_K_M.gguf --local-dir ./models
+
+# Serve with MTP enabled
+./llama-server \
+  -m models/Qwen3.6-35B-A3B-MTP-UD-Q4_K_M.gguf \
+  --host 0.0.0.0 --port 8080 \
+  -ngl 99 -c 131072 -fa on \
+  --parallel 1 \
+  --spec-type mtp --spec-draft-n-max 2 \
+  --cache-type-k q4_0 --cache-type-v q4_0
+```
+
+**Caveats:**
+- `--parallel 1` is required — MTP doesn't support multi-slot serving yet.
+- Speedup on Apple Silicon for MoE models (35B-A3B) is less consistent than for dense models — one RTX 3090 benchmark on Qwen 3.6 35B-A3B showed no net speedup ([thc1006/qwen3.6-speculative-decoding-rtx3090](https://github.com/thc1006/qwen3.6-speculative-decoding-rtx3090)). Dense Gemma 4 31B is the safer bet for guaranteed gains.
+- MTP-bundled GGUFs are community-built; quality may vary.
+
 ## What's Next: TurboQuant (KV Cache Compression)
 
 Google's [TurboQuant](https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/) (ICLR 2026) compresses the KV cache to 3 bits with zero accuracy loss. This matters for local inference because token generation is **memory bandwidth bound** — every token reads the entire KV cache. Smaller cache = less data to read = faster tok/s.
@@ -631,6 +701,21 @@ We currently use `--cache-type-k q4_0 --cache-type-v q4_0` (4-bit KV cache). Onc
 - **Merged:** [PR #21038](https://github.com/ggml-org/llama.cpp/pull/21038) — Hadamard rotation before KV caching (the core TurboQuant idea). Works on all backends including Metal and CUDA. Makes existing `q4_0` cache more accurate at the same memory footprint — a free quality upgrade when you update llama.cpp.
 - **In review:** [PR #21089](https://github.com/ggml-org/llama.cpp/pull/21089) — Actual 3-bit KV cache types (TBQ3_0/TBQ4_0). CPU-only so far — CUDA support is being developed, Metal support not yet started. When it merges with GPU support, it's a free upgrade — just change the `--cache-type-k` and `--cache-type-v` flags.
 - **Caveat:** Symmetric TurboQuant degrades quality on Qwen models. Asymmetric configs (q8_0 for K, turbo3 for V) are recommended when TBQ types land.
+
+## Tangential: Hybrid Local + Cloud Agents
+
+*This guide is about running models **locally**. This section is secondary — it's for the case where you mix in a cloud model (e.g. Claude) for the hard ~20% of tasks and want to keep that cheap and observable. Skip it if you're fully local.*
+
+**Decouple the brain from the hands.** An agent is two parts: the reasoning loop ("brain") and the code execution / tool calls ("hands"). They don't have to live in the same place. Run the brain locally (the models in this guide) for routine steps — grep, read, edit, run tests — and escalate to a cloud model only when a step is genuinely hard. The hands (a sandbox where commands run) can stay local (Docker/gVisor) or be managed, e.g. [Cloudflare Sandboxes](https://blog.cloudflare.com/claude-managed-agents/). Most agent *steps* are cheap; paying frontier prices for `ls` and `sed` is the main waste. Keep those local, spend cloud tokens only on the hard reasoning step plus a final verify.
+
+**If you do call a cloud API, put a gateway in front of it** — for cost ceilings and visibility:
+
+- **[Cloudflare AI Gateway](https://developers.cloudflare.com/ai-gateway/)** — a config-defined proxy giving per-request token/cost logging, fleet-wide spend caps, rate limiting, caching, and provider routing/fallbacks. The better choice for a standing control plane, especially if your sandbox already lives in Cloudflare. Caveat: its caching is whole-response (identical request → cached response), which rarely hits in an agent loop where the history grows every turn — so treat it as your governance + observability layer, not your prompt-cache layer.
+- **[alxsuv/pino](https://github.com/alxsuv/pino)** — a tiny (~500 LOC, zero-dep) local proxy between Claude Code and the Anthropic API. It logs request/response bodies and injects prompt-cache breakpoints on content the client ships uncached (Claude Code re-sends its ~5–15k-token tool catalog every turn), converting repeated static content from 1× to 0.1× cache-read cost. It exists to rewrite a client you *can't* modify — if you're writing your own agent loop, place the cache breakpoints in your own request code and skip the proxy.
+
+**Prompt caching is the big lever on cloud cost.** Anthropic cache reads cost ~0.1× of base input; writes cost 1.25× (5-min TTL) or 2× (1-hour). An agent loop resends the same system prompt + tool definitions every step, so caching that stable prefix is ~90% off on that chunk. Every response's `usage` object reports `cache_read_input_tokens` / `cache_creation_input_tokens` / `input_tokens` / `output_tokens` — if `cache_read` is 0 across steps, a prefix change is silently breaking the cache.
+
+**Why this matters for a local guide:** local-first keeps the marginal cost of "let it run" near zero, which is exactly what makes longer-running, less-supervised agents affordable. Cloud is the escape hatch for the hard step — gated behind a budget and a gateway.
 
 ## Credits
 
