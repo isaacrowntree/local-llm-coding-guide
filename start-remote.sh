@@ -7,7 +7,11 @@
 #
 #   ANTHROPIC_BASE_URL=https://<tunnel-url> \
 #   ANTHROPIC_AUTH_TOKEN=local \
-#   claude --model openai/qwen-3.5-9b
+#   claude --model qwen3.6:35b
+#
+# NOTE: Claude Code speaks only the Anthropic API. Tunnel a native-Anthropic
+# endpoint (Ollama 0.14+ on :11434) or a LiteLLM proxy — NOT bare llama-server,
+# which is OpenAI-only and won't work with Claude Code directly.
 #
 
 set -e
@@ -55,7 +59,7 @@ echo "  On your MacBook, run:"
 echo ""
 echo "    ANTHROPIC_BASE_URL=$TUNNEL_URL \\"
 echo "    ANTHROPIC_AUTH_TOKEN=local \\"
-echo "    claude --model openai/qwen-3.5-9b"
+echo "    claude --model qwen3.6:35b"
 echo ""
 echo "  Tunnel PID: $TUNNEL_PID (log: $TUNNEL_LOG)"
 echo "  Press Ctrl+C to stop."

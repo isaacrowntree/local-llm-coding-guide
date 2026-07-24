@@ -14,15 +14,22 @@ Tested on:
 | RTX 4070 Ti 12GB | Qwen3.5-9B Q4_K_M | ~65 tok/s | 131K | 7.8GB |
 | RTX 3060 12GB | Qwen3.5-9B Q4_K_M | ~43 tok/s | 128K | ~7.8GB |
 | RTX 3090 24GB | Qwen3.5-27B Q4_K_M | ~30 tok/s | 262K | ~18GB |
-| M3 Pro 36GB | **Qwen3.6-35B-A3B Q4_K_M** | **TBD (≈Qwen3.5)** | 262K | **~22GB** |
+| M3 Pro 36GB | **Qwen3.6-35B-A3B Q4_K_M (Ollama MLX)** | **~35 tok/s** | 262K | **~22GB** |
+| M3 Pro 36GB | **Qwen3.6-35B-A3B 4bit (mlx-lm)** | **~48 tok/s** † | 262K | **~20GB** |
 | M3 Pro 36GB | Qwen3.5-35B-A3B Q4_K_M | ~29 tok/s | 131K | ~22GB |
 | M3 Pro 36GB | Qwen3.5-9B Q4_K_M | ~20 tok/s | 131K | ~7GB |
 | M3 Pro 36GB | Qwen3.5-27B Q4_K_M | ~9 tok/s* | 131K | ~18GB |
-| M3 Pro 36GB | **Gemma 4 26B-A4B Q4_K_M (Ollama MLX)** | **~31 tok/s** | 256K | **~17GB** |
-| M3 Pro 36GB | Gemma 4 31B Q4_K_M (Ollama MLX + MTP) | ~2× baseline | 256K | ~18GB |
-| M3 Pro 36GB | Gemma 4 31B Q4_K_M | TBD | 256K | ~18GB |
+| M3 Pro 36GB | **Gemma 4 26B-A4B Q4_K_M (Ollama MLX)** | **~33 tok/s** | 256K | **~17GB** |
+| M3 Pro 36GB | Gemma 4 31B Q4_K_M (dense, Ollama MLX) | **~6 tok/s** ‡ | 256K | ~18GB |
+| M3 Pro 36GB | Gemma 4 31B + MTP | n/a § | 256K | — |
 
 *The dense 27B model is slower than the 35B-A3B on 36GB machines due to higher memory bandwidth requirements. The 35B-A3B (MoE) is faster *and* smarter — see [Why MoE?](#why-moe-mixture-of-experts) below.
+
+† Measured 2026-07-24 on M3 Pro 36GB. Raw `mlx-lm` decodes Qwen 3.6 35B-A3B at **~48 tok/s** vs Ollama MLX's **~35 tok/s** (both matched over a ~4000-token generation) — Ollama trades ~30% decode speed for its `q4_0` KV-cache + serving convenience. Ollama's prefill is much higher (~145 vs an unreliable CLI figure for mlx-lm). Pick Ollama for ease, `mlx-lm` if you want the fastest single-stream decode.
+
+‡ The dense 31B **swap-thrashes on 36GB** (~18GB weights leaves too little headroom) — measured ~6 tok/s, i.e. 5× slower than the 26B-A4B MoE. Not recommended on 36GB; use the 26B-A4B MoE instead.
+
+§ Ollama ships Gemma-4 MTP **only as `gemma4:31b-coding-mtp-bf16` (~62GB bf16)** — there is no quantized MTP tag, and 62GB cannot fit 36GB unified memory. The MTP speedup is therefore **not usable on a 36GB Mac** via Ollama. (llama.cpp's Q4 MTP path for Qwen is a separate option — see the MTP section.)
 
 ## Quick Start
 
@@ -241,11 +248,12 @@ gpu_split_auto: true
 reasoning: true
 ```
 
-**Claude Code integration:**
+**Claude Code integration:** TabbyAPI is OpenAI-only, so Claude Code needs a LiteLLM proxy in front (see the [Claude Code note](#claude-code-recommended-for-agentic-coding) — the `openai/` prefix goes in the LiteLLM config, not here). Point Claude Code at the proxy:
 ```bash
-ANTHROPIC_BASE_URL=http://localhost:5000/v1 \
+# after starting LiteLLM (see the Cursor section) mapping a model_name -> openai/<tabby-model>
+ANTHROPIC_BASE_URL=http://localhost:4000 \
 ANTHROPIC_AUTH_TOKEN=local \
-claude --model openai/qwen
+claude --model qwen
 ```
 
 **Or use the script:**
@@ -339,11 +347,12 @@ trtllm-serve ./engines/qwen3-8b-int4-awq \
 | W4A8 AWQ | ~4.5GB | Faster | Good | Yes |
 | FP4 / NVFP4 | — | — | — | **No (Blackwell only)** |
 
-**Claude Code integration:**
+**Claude Code integration:** TensorRT-LLM's `trtllm-serve` is OpenAI-only, so Claude Code needs a LiteLLM proxy in front (see the [Claude Code note](#claude-code-recommended-for-agentic-coding)). Point Claude Code at the proxy, not at `:8000` directly:
 ```bash
-ANTHROPIC_BASE_URL=http://localhost:8000/v1 \
+# after starting LiteLLM (see the Cursor section) mapping a model_name -> openai/<trt-model>
+ANTHROPIC_BASE_URL=http://localhost:4000 \
 ANTHROPIC_AUTH_TOKEN=local \
-claude --model openai/qwen
+claude --model qwen
 ```
 
 **Performance vs other engines (estimated, 8-9B INT4, RTX 4070 Ti):**
@@ -359,16 +368,17 @@ TRT-LLM's advantage grows with batched/concurrent inference. For single-user cod
 
 ## Inference Engines (macOS Apple Silicon)
 
-**Ollama (MLX) is recommended for macOS.** llama.cpp has an [open bug](https://github.com/ggml-org/llama.cpp/issues/21321) where Gemma 4 outputs only thinking tokens (`<unused25>`) — use Ollama until this is fixed.
+**Ollama (MLX) is recommended for macOS** for its ease and correct handling of Gemma 4's thinking tokens — but it is *not* the fastest. In testing (M3 Pro 36GB, 2026-07-24), raw **`mlx-lm` decodes ~30–40% faster** than Ollama for the same model (Qwen 3.6 35B-A3B: ~48 vs ~35 tok/s), because Ollama's `q4_0` KV-cache + serving layer adds overhead. Use Ollama for convenience, `mlx-lm` for maximum single-stream decode.
 
 | Engine | Decode Speed | Prefill Speed | Format | Claude Code API | Setup |
 |--------|-------------|---------------|--------|-----------------|-------|
-| **Ollama 0.20+** | **~31 tok/s (tested)** | **~99 tok/s** | Auto (MLX) | OpenAI | `brew install ollama` |
-| llama.cpp | ~29 tok/s (Qwen only) | ~70 tok/s | GGUF | OpenAI (needs `openai/` prefix) | `brew install llama.cpp` |
-| vllm-mlx | MLX-native | Good | MLX | **Native Anthropic** (no proxy) | `pip install` from git |
-| **vLLM Metal v0.2.0+** | **MLX-native, batched** | **83× v0.1 TTFT** | MLX | OpenAI | Docker Desktop 4.62+ |
+| **mlx-lm** | **~48 tok/s (Qwen 3.6, tested)** | high | MLX | OpenAI — needs LiteLLM proxy | `pip install mlx-lm` |
+| **Ollama 0.32+** | **~33 tok/s (tested)** | **~145–244 tok/s** | Auto (MLX) | **Native Anthropic** (0.14+, no proxy) | `brew install ollama` |
+| llama.cpp | ~29 tok/s (Qwen) | ~70 tok/s | GGUF | OpenAI — needs LiteLLM proxy | `brew install llama.cpp` |
+| vllm-mlx | MLX-native, ~400 tok/s batched | Good | MLX | **Native Anthropic** (no proxy) | `pip install` from git |
+| **vLLM Metal v0.3.0-dev** | **MLX-native, batched** | **83× v0.1 TTFT** | MLX | OpenAI | Docker Desktop 4.62+ |
 
-> **Note:** llama.cpp works fine with Qwen3.5 models on Mac. The thinking token bug only affects Gemma 4.
+> **Note:** The old llama.cpp Gemma 4 thinking-token bug ([#21321](https://github.com/ggml-org/llama.cpp/issues/21321)) was **fixed 2026-04-07** (PR #21566) and was actually a CUDA/ROCm fusion bug, not a Metal issue — Gemma 4 runs fine in llama.cpp on Mac now. Ollama remains the easy path, not a required workaround.
 
 ### Ollama (recommended for macOS)
 
@@ -393,9 +403,9 @@ ollama run gemma4:26b-a4b-it-q4_K_M
 
 Claude Code integration:
 ```bash
-ANTHROPIC_BASE_URL=http://localhost:11434/v1 \
+ANTHROPIC_BASE_URL=http://localhost:11434 \
 ANTHROPIC_AUTH_TOKEN=local \
-claude --model openai/gemma4:26b-a4b-it-q4_K_M
+claude --model gemma4:26b-a4b-it-q4_K_M
 ```
 
 ### vllm-mlx (recommended for Claude Code)
@@ -404,7 +414,7 @@ vllm-mlx exposes a native Anthropic `/v1/messages` endpoint — no LiteLLM proxy
 
 ```bash
 # Install
-pip install git+https://github.com/AnyLLM/vllm-mlx.git
+pip install git+https://github.com/waybarrios/vllm-mlx.git
 
 # Serve Gemma 4 26B-A4B
 vllm-mlx serve mlx-community/gemma-4-26B-A4B-it-4bit --port 8000
@@ -475,6 +485,13 @@ Always run `start-server.sh` or `start-server-mac.sh` first, then pick your flow
 
 ### Claude Code (recommended for agentic coding)
 
+> **How Claude Code talks to a local model:** Claude Code speaks **only the Anthropic Messages API** (`/v1/messages`) — it is *not* an OpenAI client. That splits local servers into two cases:
+> - **Native Anthropic — connect directly, no proxy, no prefix.** **Ollama 0.14+** and **vllm-mlx** expose `/v1/messages`. Point Claude Code straight at them with the plain model name (note: base URL has **no `/v1`**):
+>   `ANTHROPIC_BASE_URL=http://localhost:11434 ANTHROPIC_AUTH_TOKEN=local claude --model qwen3.6:35b`
+> - **OpenAI-only — needs a LiteLLM proxy.** **llama.cpp (`llama-server`), TabbyAPI, TensorRT-LLM** expose only OpenAI `/v1/chat/completions`, which Claude Code cannot consume directly. Run a [LiteLLM proxy](#cursor-limited--agent-mode-unsupported) to translate Anthropic↔OpenAI, then point Claude Code at the proxy.
+>
+> The `openai/<model>` prefix is a **LiteLLM routing convention** (it tells LiteLLM the backend is OpenAI-format) — it belongs in the LiteLLM config, never in a `claude --model` that points straight at Ollama or vllm-mlx. On a Mac, **Ollama is the zero-proxy path** and is what the rest of this section assumes.
+
 **Flow 1: Local (same machine)**
 
 ```bash
@@ -486,10 +503,11 @@ Always run `start-server.sh` or `start-server-mac.sh` first, then pick your flow
 ./start-claude-local.sh
 ```
 
-Or manually:
+Or manually — **Ollama (native Anthropic, no proxy, no prefix):**
 ```bash
-ANTHROPIC_BASE_URL=http://localhost:8080 ANTHROPIC_AUTH_TOKEN=local claude --model openai/qwen
+ANTHROPIC_BASE_URL=http://localhost:11434 ANTHROPIC_AUTH_TOKEN=local claude --model qwen3.6:35b
 ```
+> `start-server-mac.sh`/`start-server.sh` launch `llama-server`, which is OpenAI-only — to drive Claude Code from *that*, put a LiteLLM proxy in front (see the note above). For a no-proxy local setup, run Ollama (`./start-ollama-mac.sh`) and use the command above.
 
 You can run both side by side — normal `claude` for complex tasks, local Qwen for quick edits.
 
@@ -509,7 +527,7 @@ On your MacBook:
 ```bash
 ANTHROPIC_BASE_URL=https://xxx-xxx.trycloudflare.com \
 ANTHROPIC_AUTH_TOKEN=local \
-claude --model openai/qwen
+claude --model qwen3.6:35b
 ```
 
 ### Cursor (limited — Agent mode unsupported)
@@ -585,11 +603,11 @@ Best for tab completion with local models:
 | 16GB VRAM | Qwen3.5-9B | Dense | 5.3GB | ~43-65 | Haiku |
 | 24GB VRAM | Qwen3.5-27B | Dense | 16GB | ~30 | Sonnet-ish |
 | 24GB VRAM | Gemma 4 26B-A4B | MoE | 16.9GB | TBD | TBD |
-| 32GB+ (Apple Silicon) | **Qwen3.6-35B-A3B** | **MoE** | **22GB** | **≈Qwen3.5 (TBD)** | **Sonnet 4.5+ (73.4% SWE-bench)** |
+| 32GB+ (Apple Silicon) | **Qwen3.6-35B-A3B** | **MoE** | **22GB** | **~35 (Ollama) / ~48 (mlx-lm)** | **Sonnet 4.5+ (73.4% SWE-bench)** |
 | 32GB+ (Apple Silicon) | Qwen3.5-35B-A3B | MoE | 22GB | ~29 (llama.cpp) | Sonnet 4.5 |
-| 32GB+ (Apple Silicon) | **Gemma 4 26B-A4B** | **MoE** | **17GB** | **~31 (Ollama MLX)** | **Sonnet 4.5** |
-| 36GB+ (Apple Silicon) | Gemma 4 31B (with MTP) | Dense | 20GB | ~2× baseline | TBD |
-| 36GB+ (Apple Silicon) | Gemma 4 31B | Dense | 20GB | TBD | TBD |
+| 32GB+ (Apple Silicon) | **Gemma 4 26B-A4B** | **MoE** | **17GB** | **~33 (Ollama MLX)** | **Sonnet 4.5** |
+| 36GB+ (Apple Silicon) | Gemma 4 31B (with MTP) | Dense | 20GB | n/a — bf16-only, won't fit 36GB | TBD |
+| 36GB+ (Apple Silicon) | Gemma 4 31B | Dense | 20GB | ~6 (swap-bound — avoid) | TBD |
 
 \*Nemotron 3 Nano 4B uses a hybrid Mamba-2 + Transformer architecture (mostly Mamba-2 layers with just 4 attention layers). It's significantly faster than the 9B, uses only ~5GB VRAM, and supports 262K context. The tradeoff is lower coding quality — it's designed for edge agents and local assistants rather than deep reasoning. Use it when you want maximum speed or need the longer context window. Run it with `./start-server.sh nemotron`.
 
@@ -655,7 +673,7 @@ ollama pull gemma4:31b-coding-mtp-bf16
 ollama run gemma4:31b-coding-mtp-bf16
 ```
 
-This is the most reliable MTP setup right now — Google ships official drafters, Ollama wires them up automatically. The dense 31B becomes viable on 36GB with this speedup.
+Google ships official drafters and Ollama wires them up automatically. **Caveat (measured 2026-07-24):** Ollama publishes this only as **bf16 (~62GB)** — there is no quantized MTP tag, so it **does not fit a 36GB Mac** (the dense Q4 31B already swap-thrashes at ~6 tok/s there). MTP-on-Ollama for Gemma 4 is realistically a ≥64GB-machine feature; on 36GB, use the 26B-A4B MoE (no MTP needed, ~33 tok/s) or the llama.cpp Q4 MTP path below.
 
 ### llama.cpp (beta — Qwen 3.x and Gemma 4)
 
@@ -726,7 +744,7 @@ We currently use `--cache-type-k q4_0 --cache-type-v q4_0` (4-bit KV cache). Onc
 - [Nemotron 3 Nano](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16) by NVIDIA
 - [unsloth](https://huggingface.co/unsloth) for GGUF quantizations
 - [mlx-community](https://huggingface.co/mlx-community) for MLX quantizations
-- [vllm-mlx](https://github.com/AnyLLM/vllm-mlx) for MLX inference with Anthropic API
+- [vllm-mlx](https://github.com/waybarrios/vllm-mlx) for MLX inference with Anthropic API
 - [Ollama](https://ollama.com/) for easy local model management
 - [ExLlamaV3](https://github.com/turboderp-org/exllamav3) + [TabbyAPI](https://github.com/theroyallab/tabbyAPI) for fast CUDA inference
 - [TensorRT-LLM](https://github.com/NVIDIA/TensorRT-LLM) by NVIDIA for optimized engine compilation

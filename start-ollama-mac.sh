@@ -5,7 +5,9 @@
 # Ollama 0.20+ uses MLX on Apple Silicon — ~31 tok/s generation, ~99 tok/s prefill on M3 Pro.
 # Defaults to Gemma 4 26B-A4B (MoE, 4B active params, ~17GB Q4_K_M).
 #
-# Note: Use Ollama (not llama.cpp) for Gemma 4 on Mac — llama.cpp has a thinking token bug.
+# Note: The old llama.cpp Gemma 4 "thinking token" bug (#21321) was a CUDA/ROCm fusion bug,
+# not a Metal issue, and was fixed 2026-04-07 (PR #21566). Gemma 4 works in llama.cpp on Mac
+# too now — Ollama remains the easiest path, not a required workaround.
 
 set -e
 
@@ -56,7 +58,8 @@ echo "API: http://localhost:$PORT/v1 (OpenAI-compatible)"
 echo "Log: $LOG"
 echo ""
 echo "To use with Claude Code:"
-echo "  ANTHROPIC_BASE_URL=http://localhost:$PORT/v1 ANTHROPIC_AUTH_TOKEN=local claude --model openai/$MODEL"
+echo "  ANTHROPIC_BASE_URL=http://localhost:$PORT ANTHROPIC_AUTH_TOKEN=local claude --model $MODEL"
+echo "  (Ollama 0.14+ serves the native Anthropic API — no LiteLLM proxy, no openai/ prefix)"
 echo ""
 
 # Run interactively (ctrl-c to stop, server stays running)

@@ -31,7 +31,7 @@ esac
 # Check vllm-mlx is installed
 if ! python3 -c "import vllm_mlx" 2>/dev/null; then
   echo "vllm-mlx not found. Installing..."
-  pip install git+https://github.com/AnyLLM/vllm-mlx.git
+  pip install git+https://github.com/waybarrios/vllm-mlx.git
 fi
 
 # Kill any existing vllm-mlx
