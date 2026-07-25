@@ -1,0 +1,22 @@
+# LiteLLM proxy config for driving Claude Code with a local llama-server.
+#
+# Claude Code speaks ONLY the Anthropic Messages API (/v1/messages); llama-server
+# speaks only OpenAI (/v1/chat/completions). LiteLLM bridges the two: it exposes
+# an Anthropic endpoint and forwards to the OpenAI backend below.
+#
+# Used by start-claude-windows.sh. Point Claude Code at the proxy:
+#   ANTHROPIC_BASE_URL=http://localhost:4000 ANTHROPIC_AUTH_TOKEN=local \
+#     claude --model qwen3.6-local
+#
+# The `openai/` prefix is a LiteLLM routing convention (backend is OpenAI-format)
+# and belongs HERE, never in `claude --model`. llama-server ignores the model
+# name in the request, so `openai/qwen` just means "call the llama-server backend".
+model_list:
+  - model_name: qwen3.6-local
+    litellm_params:
+      model: openai/qwen
+      api_base: http://localhost:8080/v1
+      api_key: local
+
+litellm_settings:
+  drop_params: true   # silently drop params llama-server doesn't accept

@@ -1,29 +1,81 @@
 # Local LLM Coding Guide
 
-Run local LLMs as a coding assistant on consumer hardware. Supports Qwen3.6, Qwen3.5, and Gemma 4 via llama.cpp, Ollama (MLX), or vllm-mlx.
+Run local LLMs as a coding assistant on consumer hardware (NVIDIA/CUDA or Apple Silicon) via llama.cpp, Ollama, ExLlamaV3, mlx-lm, or vllm-mlx.
 
 Tested on:
 - **Windows/WSL2:** RTX 4070 Ti (12GB), Intel Core Ultra 9 285K, 48GB DDR5
 - **macOS:** M3 MacBook Pro, 36GB unified memory
 
+> **Why this guide is structured the way it is.** Specific model names and tok/s numbers go stale fast — a new "best model for 12GB" lands every few weeks. So the recommendations here are **rules, not names**: [How to choose](#how-to-choose-start-here) is stable, the model names that satisfy those rules today live in one dated [Current picks](#current-picks) block, and every performance number is something you regenerate for *your own* GPU with [`./benchmark.sh`](#benchmark-it-yourself) rather than trust from a table. When a better model drops, you swap the pick — the framework doesn't move.
+
+## How to choose (start here)
+
+Three stable questions decide your setup. The *rule* in each step rarely changes; only which model satisfies it does (see [Current picks](#current-picks)).
+
+**1. Platform & memory budget** — this is your hard constraint.
+
+| Platform | Budget = | Tiers |
+|----------|----------|-------|
+| **NVIDIA (CUDA)** | your VRAM | 8 / 12 / 16 / 24GB+ |
+| **Apple Silicon** | unified memory shared with the OS — usable ≈ *(total − 8GB)* | 16 / 24 / 36 / 64GB+ |
+
+**2. Goal** — what you're optimizing for:
+
+| Goal | Rule |
+|------|------|
+| **Quality** | the *largest-total-parameter MoE that still fits your budget at ≥IQ2*, with room for a usable context. MoE gives you big-model reasoning at small-model speed. |
+| **Speed** (tab-completion, quick edits) | a *small-active-param MoE at Q4* — maximize tok/s, accept lower ceiling. |
+| **Long context** | the model whose *KV cache at your target window fits alongside the weights* with `q4_0` cache. Decode is memory-bandwidth bound, so smaller weights buy you more context. |
+
+**3. Engine** — follows from platform (details in [Inference Engines](#inference-engines-nvidia-cuda)):
+
+| Platform | Default | Max single-user speed | Serving / batched |
+|----------|---------|----------------------|-------------------|
+| **NVIDIA** | llama.cpp (universal, day-0 models) | ExLlamaV3 + TabbyAPI (EXL3) | TensorRT-LLM |
+| **Apple** | Ollama (MLX, native Anthropic API) | mlx-lm | vllm-mlx (native Anthropic, no proxy) |
+
+**Selection rules by tier** (stable — the pick that fills each cell is in [Current picks](#current-picks)):
+
+| Budget | Quality rule | Speed rule |
+|--------|-------------|-----------|
+| **8GB VRAM / ~16GB unified** | best ~4B-active MoE at Q4 | fastest ~2–4B-active MoE at Q4 |
+| **12GB VRAM / ~24GB unified** | best 30–40B-total A3B MoE at IQ2–IQ3 | small MoE at Q4 |
+| **16GB VRAM / ~32GB unified** | same 30–40B A3B MoE at IQ3–Q4 (longer ctx) | small MoE at Q4 |
+| **24GB VRAM / 36GB+ unified** | 30B-class at Q4, or A3B MoE at full Q4 | A3B MoE at Q4 |
+
+Then **verify the current pick fits and performs** on your actual hardware with [`./benchmark.sh`](#benchmark-it-yourself) — that is the whole point of this repo. Don't trust the numbers below; regenerate them.
+
 ## Performance
 
-| GPU | Model | Tok/s | Context | Memory Used |
-|-----|-------|-------|---------|-------------|
-| RTX 4070 Ti 12GB | **Qwen3.6-35B-A3B UD-IQ2_M** | **~30-38 tok/s** | **57K** | **11.9GB** |
-| RTX 4070 Ti 12GB | **Gemma 4 E4B Q4_K_M** | **~94 tok/s** | 131K | **5.0GB** |
-| RTX 4070 Ti 12GB | Nemotron 3 Nano 4B Q4_K_M | TBD | 262K | ~5GB |
-| RTX 4070 Ti 12GB | Qwen3.5-9B Q4_K_M | ~65-78 tok/s | 131K | 8.2GB |
-| RTX 3060 12GB | Qwen3.5-9B Q4_K_M | ~43 tok/s | 128K | ~7.8GB |
-| RTX 3090 24GB | Qwen3.5-27B Q4_K_M | ~30 tok/s | 262K | ~18GB |
-| M3 Pro 36GB | **Qwen3.6-35B-A3B Q4_K_M (Ollama MLX)** | **~35 tok/s** | 262K | **~22GB** |
-| M3 Pro 36GB | **Qwen3.6-35B-A3B 4bit (mlx-lm)** | **~48 tok/s** † | 262K | **~20GB** |
-| M3 Pro 36GB | Qwen3.5-35B-A3B Q4_K_M | ~29 tok/s | 131K | ~22GB |
-| M3 Pro 36GB | Qwen3.5-9B Q4_K_M | ~20 tok/s | 131K | ~7GB |
-| M3 Pro 36GB | Qwen3.5-27B Q4_K_M | ~9 tok/s* | 131K | ~18GB |
-| M3 Pro 36GB | **Gemma 4 26B-A4B Q4_K_M (Ollama MLX)** | **~33 tok/s** | 256K | **~17GB** |
-| M3 Pro 36GB | Gemma 4 31B Q4_K_M (dense, Ollama MLX) | **~6 tok/s** ‡ | 256K | ~18GB |
-| M3 Pro 36GB | Gemma 4 31B + MTP | n/a § | 256K | — |
+> The table below is **our** last local run, not a spec sheet. Regenerate it for your GPU with [`./benchmark.sh`](#benchmark-it-yourself); results land in `benchmarks/RESULTS-<host>.md`. Numbers move with your llama.cpp build, drivers, and flags.
+
+### Windows / NVIDIA — RTX 4070 Ti 12GB (measured 2026-07-25 via `benchmark.sh`)
+
+Median decode tok/s (this box has high run-to-run variance under WSL2 — see [full results](benchmarks/RESULTS-IsaacPC.md)). `d0` = decode at empty context (peak); `@16K` = decode at 16K context, which is what you actually feel while coding. Flags: `-ngl 99 -fa 1 -ctk q4_0 -ctv q4_0`.
+
+| Model (GGUF) | Prefill tok/s | Decode tok/s (d0) | Decode @16K | Peak VRAM |
+|--------------|--------------:|------------------:|------------:|----------:|
+| **Qwen3.6-35B-A3B UD-IQ2_M** | 3392 | **113** | **~27** | 11.9GB |
+| **Gemma 4 E4B Q4_K_M** | 7049 | **93** | ~78 | 4.2GB |
+| DeepSeek-R1-Qwen3-8B Q4_K_M | 5246 | 76 | — | 5.6GB |
+| Qwen3.5-9B Q4_K_M | 4531 | 67 | — | 6.2GB |
+| Qwen3-14B Q4_K_M | 2910 | 53 | — | 9.4GB |
+| Devstral-Small-2 24B IQ2_M | 1646 | 46 | — | 8.6GB |
+
+> **This is why we benchmark ourselves.** The old guide listed Qwen3.6-A3B at "~30-38 tok/s" — that was really the *16K-context* number (~27); at low context it decodes **~113**. Both are real, so the table now shows both. Peak VRAM 11.9GB confirms it fits 12GB, but with almost no headroom — expect OOM if you push context past ~57K or run anything else on the GPU. Other NVIDIA cards (3060/3090/etc.): run `./benchmark.sh` — don't trust a number measured on a different card.
+
+### macOS — M3 Pro 36GB (measured 2026-07-24)
+
+| Model | Tok/s | Context | Memory Used |
+|-------|-------|---------|-------------|
+| **Qwen3.6-35B-A3B Q4_K_M (Ollama MLX)** | **~35** | 262K | **~22GB** |
+| **Qwen3.6-35B-A3B 4bit (mlx-lm)** | **~48** † | 262K | **~20GB** |
+| Qwen3.5-35B-A3B Q4_K_M | ~29 | 131K | ~22GB |
+| Qwen3.5-9B Q4_K_M | ~20 | 131K | ~7GB |
+| Qwen3.5-27B Q4_K_M | ~9 * | 131K | ~18GB |
+| **Gemma 4 26B-A4B Q4_K_M (Ollama MLX)** | **~33** | 256K | **~17GB** |
+| Gemma 4 31B Q4_K_M (dense, Ollama MLX) | **~6** ‡ | 256K | ~18GB |
+| Gemma 4 31B + MTP | n/a § | 256K | — |
 
 *The dense 27B model is slower than the 35B-A3B on 36GB machines due to higher memory bandwidth requirements. The 35B-A3B (MoE) is faster *and* smarter — see [Why MoE?](#why-moe-mixture-of-experts) below.
 
@@ -32,6 +84,22 @@ Tested on:
 ‡ The dense 31B **swap-thrashes on 36GB** (~18GB weights leaves too little headroom) — measured ~6 tok/s, i.e. 5× slower than the 26B-A4B MoE. Not recommended on 36GB; use the 26B-A4B MoE instead.
 
 § Ollama ships Gemma-4 MTP **only as `gemma4:31b-coding-mtp-bf16` (~62GB bf16)** — there is no quantized MTP tag, and 62GB cannot fit 36GB unified memory. The MTP speedup is therefore **not usable on a 36GB Mac** via Ollama. (llama.cpp's Q4 MTP path for Qwen is a separate option — see the MTP section.)
+
+## Benchmark it yourself
+
+The numbers in this guide are generated, not asserted. [`benchmark.sh`](benchmark.sh) runs `llama-bench` over the GGUFs you have locally, using the same flags the guide recommends for `llama-server`, and prints a dated markdown table of prefill/decode throughput and peak VRAM — for **your** GPU.
+
+```bash
+# Bench every *.gguf in ~/models (override with MODELS_DIR)
+./benchmark.sh
+
+# Or specific files
+./benchmark.sh ~/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf ~/models/gemma-4-E4B-it-Q4_K_M.gguf
+```
+
+Config via env: `NP` (prefill tokens, default 2048), `NG` (decode tokens, 128), `DEPTH` (KV depth to decode at — set `8192` for a realistic long-context decode number), `REPS` (3), `NGL` (99), `KV` (`q4_0`), `FA` (1). Results are teed to `benchmarks/RESULTS-<host>.md`. Models too big to fully offload are retried with a smaller batch, then partial offload, and flagged in the Notes column.
+
+This is the antidote to staleness: when a new model shows up, download the GGUF, run `./benchmark.sh`, and you have a trustworthy tok/s + VRAM number for *your* card in under a minute — no waiting for someone to re-benchmark it on hardware unlike yours.
 
 ## Quick Start
 
@@ -207,8 +275,8 @@ llama.cpp is the reliable default. ExLlamaV3 + TabbyAPI is ~50-60% faster using 
 
 | Engine | ~Tok/s (9B, 4-bit) | Format | Gemma 4? | Setup |
 |--------|-------------------|--------|----------|-------|
-| **ExLlamaV3 + TabbyAPI** | **~100-130** | EXL3 (CUDA-only) | Not yet | `git clone` + `start.sh` |
-| **TensorRT-LLM** | **~80-95** | TRT engine / HF | Not yet | Docker container |
+| **ExLlamaV3 + TabbyAPI** | **~100-130** | EXL3 (CUDA-only) | Dense yes; **E4B no** (as of 2026-07) | `git clone` + `start.sh` |
+| **TensorRT-LLM** | **~80-95** | TRT engine / HF | Not yet (Gemma 3 only) | Docker container |
 | **llama.cpp** | ~65-94* | GGUF (universal) | Yes (day-0) | Build or download binary |
 | Ollama | ~62 | GGUF (llama.cpp backend) | Yes | `brew install ollama` |
 
@@ -220,7 +288,7 @@ llama.cpp is the reliable default. ExLlamaV3 + TabbyAPI is ~50-60% faster using 
 
 ExLlamaV3 uses the EXL3 format with calibration-based quantization — it measures which layers matter most and allocates more bits to them. TabbyAPI serves it with an OpenAI-compatible API.
 
-> **Note:** ExLlamaV2 is archived. ExLlamaV3 + EXL3 is the active project. Gemma 4 is not yet supported — use llama.cpp for Gemma 4 on CUDA.
+> **Note (updated 2026-07):** ExLlamaV2 is archived; ExLlamaV3 + EXL3 is the active project. ExLlamaV3 **now supports dense Gemma 4** (`Gemma4ForConditionalGeneration`) and Qwen 3.5 (incl. MoE) — but **not the E2B/E4B variants**, and **Qwen 3.6 is not yet listed**. So for the guide's Gemma 4 **E4B** speed pick, still use llama.cpp on CUDA; EXL3 is for dense Gemma 4 / Qwen 3.5.
 
 **Setup:**
 ```bash
@@ -284,9 +352,9 @@ claude --model qwen
 | **Qwen3.5-9B** | `turboderp/Qwen3.5-9B-exl3` | 4.0 | ~4.5GB | Yes (recommended) |
 | Qwen3.5-9B | `turboderp/Qwen3.5-9B-exl3` | 5.0 | ~5.6GB | Yes (higher quality) |
 | Qwen3.5-9B | `turboderp/Qwen3.5-9B-exl3` | 6.0 | ~6.7GB | Yes |
-| Gemma 4 * | — | — | — | Not yet supported |
+| Gemma 4 dense (26B/31B) | search HF `exl3` | 3–4 | varies | Dense yes; **E4B not supported** |
 
-\*ExLlamaV3 supports Gemma 2 and 3, but not Gemma 4 yet. Watch the [ExLlamaV3 repo](https://github.com/turboderp-org/exllamav3) for updates.
+\*As of 2026-07, ExLlamaV3 supports **dense Gemma 4** and Qwen 3.5 (incl. MoE), but **not the E2B/E4B** variants, and Qwen 3.6 is not yet listed. For the E4B speed pick use llama.cpp. Watch the [ExLlamaV3 repo](https://github.com/turboderp-org/exllamav3) for E4B/Qwen 3.6 support.
 
 ### TensorRT-LLM (maximum optimization after you've chosen a model)
 
@@ -490,7 +558,8 @@ Flow 3: Cursor (Chat/Cmd+K only — Agent mode unsupported)
 | `start-tabby.sh` | 1 | Linux/WSL | Start TabbyAPI + ExLlamaV3 (`4bpw`, `5bpw`, `6bpw`) |
 | `start-ollama-mac.sh` | 1 | macOS | Start Ollama with Gemma 4 (`26b-a4b`, `31b`, or `e4b`) |
 | `start-vllm-mlx-mac.sh` | 1 | macOS | Start vllm-mlx with Gemma 4 (native Anthropic API) |
-| `start-claude-local.sh` | 1 | Any | Launch Claude Code with local model (auto-detects) |
+| `start-claude-local.sh` | 1 | Any | Launch Claude Code with local model (auto-detects Ollama) |
+| `start-claude-windows.sh` | 1 | Linux/WSL | **Claude Code full stack: llama-server (`-ncmoe` headroom) + LiteLLM + `claude`** |
 | `start-remote.sh` | 2 | Linux/WSL | Tunnel llama-server for remote access |
 | `start-cursor-local.sh` | 3 | Linux/WSL | LiteLLM proxy + tunnel for Cursor |
 | `stop-all.sh` | — | Any | Kill everything |
@@ -508,7 +577,39 @@ Always run `start-server.sh` or `start-server-mac.sh` first, then pick your flow
 >
 > The `openai/<model>` prefix is a **LiteLLM routing convention** (it tells LiteLLM the backend is OpenAI-format) — it belongs in the LiteLLM config, never in a `claude --model` that points straight at Ollama or vllm-mlx. On a Mac, **Ollama is the zero-proxy path** and is what the rest of this section assumes.
 
-**Flow 1: Local (same machine)**
+#### Windows / WSL2 + NVIDIA (validated 2026-07-25)
+
+llama.cpp is OpenAI-only, so the Windows path is: **`llama-server` → LiteLLM (Anthropic bridge) → Claude Code**. One script sets up all three:
+
+```bash
+./start-claude-windows.sh --dangerously-skip-permissions
+# or headless:  ./start-claude-windows.sh -p "fix the failing test in test_foo.py"
+```
+
+Or copy-paste the launch string yourself (once `llama-server` + LiteLLM are up on :8080 / :4000):
+
+```bash
+ANTHROPIC_BASE_URL=http://localhost:4000 \
+ANTHROPIC_AUTH_TOKEN=local ANTHROPIC_API_KEY=local \
+claude --model qwen3.6-local --dangerously-skip-permissions \
+  --disallowedTools WebSearch WebFetch
+```
+
+> **Disable WebSearch/WebFetch.** These are Anthropic **server-side** tools (their tool `type` is `web_search_*`/`web_fetch_*`, not `function`), so llama-server rejects them with `400: 'type' of tool must be 'function'` — and they can't run against a local model anyway. `--disallowedTools WebSearch WebFetch` removes them; `start-claude-windows.sh` does this automatically.
+
+> **The 12GB gotcha — you must offload some experts to CPU.** At full GPU offload the Qwen3.6-35B-A3B IQ2 pick uses **~all 12GB (free=0)** and is unstable for agentic use: it loads, then OOM-exits the moment Claude Code's **~25K-token** system prompt + tools (or a CUDA graph) needs more VRAM. The fix is `--n-cpu-moe` (`-ncmoe`): keep some MoE expert layers on CPU. It's also your main **speed** dial — measured on a 4070 Ti at 128K context:
+>
+> | `-ncmoe` | VRAM | Decode | Notes |
+> |---------:|-----:|-------:|-------|
+> | 16 | 8.8GB | ~40 tok/s | most headroom |
+> | 8 | 10.6GB | **~77 tok/s** | ~2× faster, still fits |
+> | 0 (full GPU) | >12GB | — | OOM at large context |
+>
+> Fewer CPU experts = faster decode but less VRAM. `start-claude-windows.sh` defaults to `NCMOE=16`, `CTX=40960` (enough for Claude Code's ~25K prompt), and `REASONING=0` (thinking off — fastest, best for the tool loop; set `REASONING=medium` for a capped 1536-token thinking budget, or `-1` for unlimited).
+
+> **Does it actually work?** Yes — validated on this RTX 4070 Ti: pointed at a small project with a failing test, the local model drove the full agent loop (read → edit → run `pytest` → report) and fixed the bug with correct, documented code. Tool-calling held up on the 2-bit quant. Expect it to be slow and to need the `-ncmoe` headroom above; it is genuinely usable for the daily small-edit 70–80%, not the hard 20%.
+
+**Flow 1: Local (same machine — macOS/Ollama)**
 
 ```bash
 # Terminal 1: start the server
@@ -609,52 +710,69 @@ Best for tab completion with local models:
 
 [Void](https://voideditor.com/) is a VS Code fork with native local model support. No tunnels or workarounds needed.
 
-## Model Selection Guide
+## Model selection: current picks
 
-| Memory | Recommended Model | Type | Q4 Size | Tok/s (approx) | Quality Tier |
-|--------|-------------------|------|---------|-----------------|-------------|
-| 8GB VRAM | **Gemma 4 E4B** | **MoE** | **4.7GB** | **~94** | **Haiku+ (fast)** |
-| 8GB VRAM | Qwen3.5-9B (alt) | Dense | 5.3GB | ~43-65 | Haiku |
-| 8GB VRAM | Nemotron 3 Nano 4B (alt) | Hybrid Mamba-2 | ~2.5GB | faster* | Below Haiku |
-| 12GB VRAM | **Qwen3.6-35B-A3B (IQ2)** | **MoE** | **11.5GB** | **~30-38 (57K ctx)** | **Sonnet-class** |
-| 12GB VRAM | **Gemma 4 E4B** | **MoE** | **4.7GB** | **~94 (131K ctx)** | **Haiku+ (fast)** |
-| 12GB VRAM | Qwen3.5-9B (alt) | Dense | 5.3GB | ~65-78 | Haiku |
-| 16GB VRAM | **Qwen3.6-35B-A3B (IQ3)** | **MoE** | **~13GB** | **~30** | **Sonnet-class** |
-| 16GB VRAM | Gemma 4 E4B | MoE | 4.7GB | ~94 | Haiku+ (fast) |
-| 24GB VRAM | Qwen3.5-27B | Dense | 16GB | ~30 | Sonnet-ish |
-| 24GB VRAM | Gemma 4 26B-A4B | MoE | 16.9GB | TBD | TBD |
-| 32GB+ (Apple Silicon) | **Qwen3.6-35B-A3B** | **MoE** | **22GB** | **~35 (Ollama) / ~48 (mlx-lm)** | **Sonnet 4.5+ (73.4% SWE-bench)** |
-| 32GB+ (Apple Silicon) | Qwen3.5-35B-A3B | MoE | 22GB | ~29 (llama.cpp) | Sonnet 4.5 |
-| 32GB+ (Apple Silicon) | **Gemma 4 26B-A4B** | **MoE** | **17GB** | **~33 (Ollama MLX)** | **Sonnet 4.5** |
-| 36GB+ (Apple Silicon) | Gemma 4 31B (with MTP) | Dense | 20GB | n/a — bf16-only, won't fit 36GB | TBD |
-| 36GB+ (Apple Silicon) | Gemma 4 31B | Dense | 20GB | ~6 (swap-bound — avoid) | TBD |
+> **This is the deliberately volatile part of the guide.** Everything here is dated and expected to churn. The stable logic is in [How to choose](#how-to-choose-start-here); this section only records which model satisfies each rule *right now*, plus what's on deck to replace it. Always confirm fit and speed on your own hardware with [`./benchmark.sh`](#benchmark-it-yourself).
 
-\*Nemotron 3 Nano 4B uses a hybrid Mamba-2 + Transformer architecture (mostly Mamba-2 layers with just 4 attention layers). It's significantly faster than the 9B, uses only ~5GB VRAM, and supports 262K context. The tradeoff is lower coding quality — it's designed for edge agents and local assistants rather than deep reasoning. Use it when you want maximum speed or need the longer context window. Run it with `./start-server.sh nemotron`.
+### Current picks
+**As of 2026-07-25.** Quality = biggest MoE that fits at ≥IQ2 with usable context; Speed = small MoE at Q4. Tok/s and VRAM come from [our benchmark run](#performance) / your own `./benchmark.sh` — they are not restated here so they can't rot in two places.
+
+| Budget | Quality pick | Speed pick | Notes |
+|--------|-------------|-----------|-------|
+| **8GB VRAM** | Gemma 4 E4B (Q4) | Gemma 4 E4B (Q4) | one model wins both at this tier |
+| **12GB VRAM** | Qwen3.6-35B-A3B (UD-IQ2_M) | Gemma 4 E4B (Q4) | quality pick is 2-bit — see caveat below |
+| **16GB VRAM** | Qwen3.6-35B-A3B (IQ3) | Gemma 4 E4B (Q4) | IQ3 buys quality headroom + longer context |
+| **24GB VRAM** | Qwen3.5-27B (Q4) or A3B MoE (Q4) | Gemma 4 E4B / A3B (Q4) | full-Q4 MoE fits here |
+| **32–36GB Apple** | Qwen3.6-35B-A3B (Q4) | Gemma 4 26B-A4B (Q4) | see [macOS engines](#inference-engines-macos-apple-silicon); avoid dense 31B (swap-bound) |
+
+**Caveat on the 12GB quality pick:** the headline "73.4% SWE-bench / Sonnet-class" figure for Qwen3.6-35B-A3B is the *full-precision* model. The 12GB pick runs it at **UD-IQ2_M (~2-bit)**, which degrades quality by an unmeasured amount — treat it as "Sonnet-class *architecture*, quantization-reduced," not a guaranteed Sonnet-class result. This is exactly why the dense 16B challenger on the watchlist is worth benchmarking against it.
+
+### Watchlist (candidates to replace the picks above)
+- **DeepSeek-Coder V3 Distilled 16B** — dense 16B, ~40.5% SWE-bench Verified, fits 12GB at Q4 with *no IQ2 degradation*. The strongest honest quality-per-GB challenger to the Qwen3.6-IQ2 pick; benchmark them head-to-head on your card before committing.
+- **Qwen3-Coder-Next** (80B-A3B MoE, Feb 2026) — ~70% SWE-bench, but needs ~24GB (Q4 ~52GB / 24GB VRAM minimum). The 24GB-tier aspiration, not a 12GB fit.
+- **Nemotron 3 Nano 4B** — hybrid Mamba-2 (mostly Mamba-2 + 4 attention layers), ~2.5GB, 262K context. Below-Haiku coding quality — designed for edge agents. Use only when you need maximum speed or the long window. `./start-server.sh nemotron`.
+
+_Snapshot only. Check a live leaderboard (SWE-bench Verified, [llm-stats.com](https://llm-stats.com/)) before trusting any name in this section._
 
 ### Why not the dense 27B on Apple Silicon?
 
 On a 36GB M3 Pro, the dense 27B model uses ~18GB for weights + 2.3GB for KV cache, leaving very little headroom. In practice this causes **swap thrashing** (~1.7 tok/s) when other apps are running. The 35B-A3B MoE is larger on disk (22GB) but faster at inference because it only activates 3B parameters per token.
 
-### Honest comparison to premium models
+### Quality tiers vs premium models
 
-The **Qwen3.6-35B-A3B** (April 2026) closes the gap further: **73.4% SWE-bench Verified**, **51.5% Terminal-Bench 2.0**, **37.0% MCPMark** (tool use). It handles single-file tasks, refactoring, bug fixes, test writing, and short agent loops well — comfortably matching Sonnet 4.5 on coding, with notably better tool/MCP integration than Gemma 4 (37% vs 18.1% MCPMark).
+This is about *capability*, not speed — for tok/s and VRAM see [Performance](#performance) / `./benchmark.sh`. Benchmark numbers below are the models' **full-precision** published scores; a quantized local run (especially IQ2) lands somewhat lower, which is the whole point of the [12GB caveat](#current-picks).
 
-The **Qwen3.5-35B-A3B** sits roughly in the **Sonnet 4.5 tier** — it beats Sonnet 4.5 on instruction following (IFBench) and is competitive on coding benchmarks.
+| Model (full precision) | Published coding signal | Rough tier |
+|------------------------|-------------------------|-----------|
+| **Qwen3.6-35B-A3B** | 73.4% SWE-bench Verified, 51.5% Terminal-Bench 2.0, 37.0% MCPMark | Sonnet 4.5+ on coding; best local tool/MCP use |
+| **Qwen3.5-35B-A3B** | competitive coding, beats Sonnet 4.5 on IFBench | Sonnet 4.5 tier |
+| **Gemma 4 E4B** | comparable to 9B-dense on standard coding; ~18% MCPMark | Haiku+ (fast); weaker at multi-step & tool use |
+| **Qwen3.5-9B** | solid completions/edits/boilerplate | GPT-4o-mini / Haiku |
 
-The **Qwen3.6-35B-A3B** is the first Sonnet-class model that fits on 12GB VRAM — using Unsloth's UD-IQ2_M quantization (adaptive per-layer 2-bit). Despite 11.5GB of model weights, the MoE architecture's shared KV layers keep cache overhead low, allowing up to **57K context** with q4_0 KV cache. Runs at ~30-38 tok/s. On 16GB+ cards, use IQ3 or Q4 quants for better quality and longer context.
-
-The **Gemma 4 E4B** is the speed champion for 8-16GB NVIDIA GPUs — ~94 tok/s at just 5.0GB VRAM with 131K context. Quality is comparable to the 9B dense models on standard coding tasks, though the smaller active parameter count (~2B) means it may underperform on complex multi-step reasoning.
-
-The **Qwen3.5-9B** sits in the **GPT-4o-mini / Haiku tier**. Good for fast completions, quick edits, boilerplate, and explanations. Slightly better quality than Gemma 4 E4B on harder tasks, but ~30% slower.
-
-All of these still fall short of Claude Opus 4.7 on long-horizon agentic workflows, multi-file refactors, and deep reasoning. Best strategy: route the daily 70-80% of edits to a local model and reserve Opus for the hard 20%.
-
-**On 12GB specifically:** use Qwen3.6-35B-A3B for hard problems that need quality, and Gemma 4 E4B for fast edits that need long context.
+Two honesty notes that don't go stale:
+- **Quantization tax.** The 12GB quality pick runs Qwen3.6-35B-A3B at ~2-bit (UD-IQ2_M). Treat the 73.4% as an *architecture ceiling*, not what you'll get locally — measure the gap, don't assume it away.
+- **The frontier still wins the hard 20%.** All local picks fall short of frontier models (Claude Opus-class) on long-horizon agentic workflows, multi-file refactors, and deep reasoning. Best strategy: route the daily 70–80% of edits to a local model, reserve a frontier API for the hard 20% (see [Hybrid Local + Cloud](#tangential-hybrid-local--cloud-agents)).
 
 ## Troubleshooting
 
 ### OOM / CUDA out of memory
 Reduce context: `-c 32768` or `-c 16384`. The KV cache scales with context size.
+
+### Model loads, then dies on the first request (12GB, `free = 0`)
+On a 12GB card the Qwen3.6-35B-A3B IQ2 pick fits its *weights* but leaves almost no VRAM free (`llama_memory_breakdown` shows `free = 0`). It loads and starts listening, then OOM-exits the moment a real request needs more — Claude Code's ~15K-token system prompt, a longer context, or a CUDA graph capture. Two symptoms: (1) restarting the server OOMs because the previous instance's VRAM hasn't been released yet (WSL2 is slow to free it — wait ~5s and confirm `nvidia-smi` shows idle before restarting); (2) it works for one tiny prompt then crashes on a bigger one.
+
+**Fix: offload some MoE experts to CPU for headroom** with `--n-cpu-moe` (`-ncmoe`). Measured on the 4070 Ti at 128K context: `-ncmoe 16` → ~8.8GB, ~40 tok/s; `-ncmoe 8` → ~10.6GB, **~77 tok/s** (fewer CPU experts = faster *and* more VRAM used). This is exactly what `start-claude-windows.sh` does. Raise `CTX` for more agent room and raise `-ncmoe` to pay for it in VRAM. (Cheap for an MoE — only ~3B params are active per token, so CPU-side expert compute is modest.)
+
+### `400: 'type' of tool must be 'function'` (Claude Code + local model)
+Claude Code offered the model an Anthropic **server-side** tool — **`WebSearch`** or **`WebFetch`** (their tool `type` is `web_search_*`/`web_fetch_*`, not `function`) — and llama-server rejected it. These tools run on Anthropic's servers and can't work against a local model anyway. **Fix:** add `--disallowedTools WebSearch WebFetch` to your `claude` launch (`start-claude-windows.sh` already does).
+
+### LiteLLM won't start after an OS upgrade (`ModuleNotFoundError: No module named 'litellm'`)
+A distro upgrade that bumps the system Python (e.g. Ubuntu 26.04 → Python 3.14) orphans a pip-installed `litellm` from the old version. Reinstall into a venv on the new Python:
+```bash
+python3 -m venv ~/litellm-venv
+~/litellm-venv/bin/pip install 'litellm[proxy]'   # bootstrap pip via get-pip.py first if venv ensurepip is missing
+```
+Then run `~/litellm-venv/bin/litellm --config …`. `start-claude-windows.sh` auto-detects `~/litellm-venv/bin/litellm`. A **driver-only** update needs no rebuild of llama.cpp; a CUDA-toolkit **major** bump might.
 
 ### Slow on Apple Silicon (< 10 tok/s)
 Check `memory_pressure` — if free memory is below 20%, you're swap-thrashing. Close memory-hungry apps (Chrome is usually the biggest offender) or switch to the 9B model.
@@ -722,14 +840,15 @@ huggingface-cli download havenoammo/Qwen3.6-35B-A3B-MTP-GGUF \
 
 **Caveats:**
 - `--parallel 1` is required — MTP doesn't support multi-slot serving yet.
-- Speedup on Apple Silicon for MoE models (35B-A3B) is less consistent than for dense models — one RTX 3090 benchmark on Qwen 3.6 35B-A3B showed no net speedup ([thc1006/qwen3.6-speculative-decoding-rtx3090](https://github.com/thc1006/qwen3.6-speculative-decoding-rtx3090)). Dense Gemma 4 31B is the safer bet for guaranteed gains.
+- **The speedup lands on *dense* models, not on the A3B MoE that fits 12GB.** Measured on Qwen 3.6 via PR #22673: **~1.73× on the 27B dense, only ~1.17× on the 35B-A3B MoE**; an independent RTX 3090 run found *no net speedup* on Ampere + A3B ([thc1006/qwen3.6-speculative-decoding-rtx3090](https://github.com/thc1006/qwen3.6-speculative-decoding-rtx3090)). So for the 12GB IQ2 MoE pick, don't expect much from plain MTP — dense Gemma 4 31B / Qwen 3.6 27B are where it pays off.
+- **Better MoE path — NextN speculative decoding (fork).** The [AtomicBot-ai TurboQuant fork](https://github.com/AtomicBot-ai/atomic-llama-cpp-turboquant) implements Qwen 3.6 **NextN** auxiliary-head drafting reporting **+28–36% on the 35B-A3B MoE** (and Gemma 4 MTP at +30–50%), with CUDA kernels — meaningfully better than upstream MTP's 1.17× on that model. Not merged upstream; see [KV cache compression](#kv-cache-compression-turboquant--now-on-cuda-via-forks).
 - MTP-bundled GGUFs are community-built; quality may vary.
 
-## What's Next: TurboQuant (KV Cache Compression)
+## KV cache compression (TurboQuant) — now on CUDA via forks
 
 Google's [TurboQuant](https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/) (ICLR 2026) compresses the KV cache to 3 bits with zero accuracy loss. This matters for local inference because token generation is **memory bandwidth bound** — every token reads the entire KV cache. Smaller cache = less data to read = faster tok/s.
 
-We currently use `--cache-type-k q4_0 --cache-type-v q4_0` (4-bit KV cache). Once TurboQuant lands in llama.cpp, switching to 3-bit cache would give us:
+We currently use `--cache-type-k q4_0 --cache-type-v q4_0` (4-bit KV cache). Moving to a 3-bit TurboQuant cache would give us:
 
 - **Faster generation** — ~25% less data to read per token during attention
 - **Higher quality quants** — freed VRAM means you could use Q5_K_M or Q6_K instead of Q4_K_M for model weights, getting better output at the same VRAM budget
@@ -741,11 +860,15 @@ We currently use `--cache-type-k q4_0 --cache-type-v q4_0` (4-bit KV cache). Onc
 | Qwen 9B + 262K on 12GB | OOM | Feasible |
 | Nemotron 4B + 262K on 8GB | Tight | Comfortable |
 
-**Status (April 2026):**
-- **Merged:** [PR #21038](https://github.com/ggml-org/llama.cpp/pull/21038) — Hadamard rotation before KV caching (the core TurboQuant idea). Works on all backends including Metal and CUDA. Makes existing `q4_0` cache more accurate at the same memory footprint — a free quality upgrade when you update llama.cpp.
-- **In review:** [PR #21089](https://github.com/ggml-org/llama.cpp/pull/21089) — Actual 3-bit KV cache types (TBQ3_0/TBQ4_0). CPU-only so far — CUDA support is being developed, Metal support not yet started. When it merges with GPU support, it's a free upgrade — just change the `--cache-type-k` and `--cache-type-v` flags.
-- **Caveat:** Symmetric TurboQuant degrades quality on Qwen models. K compression (not V) drives the quality loss — Qwen models have a 10-60x K/V magnitude ratio. Asymmetric configs (q8_0 for K, turbo3 for V) are recommended when TBQ types land.
-- **Community forks with GPU support:** [turboquant_plus](https://github.com/TheTom/turboquant_plus) has experimental Metal, CUDA, and HIP support for turbo2/turbo3/turbo4 types. Benchmarks show turbo4 adds only +0.23% PPL vs q8_0 baseline, and turbo3 adds +1.06%. If you want to try TurboQuant on GPU before official support lands, this is the most complete fork.
+**Status (updated 2026-07):**
+- **Merged upstream:** [PR #21038](https://github.com/ggml-org/llama.cpp/pull/21038) — Hadamard rotation before KV caching (the core TurboQuant idea). Works on all backends including Metal and CUDA. Makes existing `q4_0` cache more accurate at the same memory footprint — a free quality upgrade when you update llama.cpp.
+- **Actual 3-bit KV types — CUDA now works, but via forks, not upstream yet.** [PR #21089](https://github.com/ggml-org/llama.cpp/pull/21089) (TBQ3_0/TBQ4_0) was CPU-only in review; since then several forks have shipped **working CUDA kernels**:
+  - [AtomicBot-ai/atomic-llama-cpp-turboquant](https://github.com/AtomicBot-ai/atomic-llama-cpp-turboquant) — TURBO2/3/4_0 KV + TQ4_1S weight quant with CUDA kernels (~4.3× KV compression), **plus Qwen 3.6 NextN and Gemma 4 MTP** in the same build.
+  - [AmesianX/TurboQuant](https://github.com/AmesianX/TurboQuant) — reports ~5.2× KV memory reduction, near-lossless.
+  - [spiritbuun/buun-llama-cpp](https://github.com/spiritbuun/buun-llama-cpp) — TurboQuant with CUDA support.
+  - Real-world: a turbo4/q8_0 hybrid KV cache hit **~40.6 tok/s on an RTX 3070** with full 262K context ([writeup](https://blog.lucad.cloud/articles/turboquant-mtp-get-406-toks-out-of-qwen36)).
+- **Caveat:** Symmetric TurboQuant degrades quality on Qwen models — K compression (not V) drives the loss (Qwen has a 10–60× K/V magnitude ratio). Use asymmetric configs (e.g. `q8_0` for K, `turbo3`/`turbo4` for V). The [turboquant_plus](https://github.com/TheTom/turboquant_plus) fork measured turbo4 at +0.23% PPL and turbo3 at +1.06% vs a q8_0 baseline.
+- **For our 12GB card:** this is now worth trying — an asymmetric turbo cache frees enough VRAM to push the Qwen3.6-IQ2 pick past its ~57K context ceiling, or to run the weights at a higher quant. It's still fork territory (build required), so treat it as an experiment, not the default `benchmark.sh` config, until it lands upstream.
 
 ## Tangential: Hybrid Local + Cloud Agents
 
