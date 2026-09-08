@@ -11,3 +11,8 @@ __pycache__/
 
 # LAN client config (contains the llama-server API key)
 .llama-lan.conf
+
+# real llama-server keys (only the .example template is tracked)
+windows/api-keys.txt
+api-keys.txt
+api-key.txt

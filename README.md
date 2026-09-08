@@ -568,6 +568,12 @@ Flow 3: Cursor (Chat/Cmd+K only — Agent mode unsupported)
 | `start-claude-windows.sh` | 1 | Linux/WSL | **Claude Code full stack: llama-server (`-ncmoe` headroom) + LiteLLM + `claude`** |
 | `start-remote.sh` | 2 | Linux/WSL | Tunnel llama-server for remote access (**public internet** — prefer the LAN path below) |
 | `connect-lan-mac.sh` | 2 | macOS/Linux | **Connect Claude Code to llama-server on another LAN machine** (API key + preflight check) |
+| `windows/claude-local.ps1` | 1 | Windows | **Claude Code against the local model** — starts llama-server if needed |
+| `windows/claude-cloud.ps1` | — | Windows | Claude Code against the Anthropic cloud (clears `ANTHROPIC_*` so it can't be hijacked) |
+| `windows/serve-lan.ps1` | 2 | Windows | Serve the model to your LAN (`--api-key-file`, binds `0.0.0.0`) |
+| `windows/setup-lan-firewall.ps1` | 2 | Windows | One-time inbound rule, **LocalSubnet only** (run elevated) |
+| `windows/rotate-keys.ps1` | 2 | Windows | List valid keys (`-Show`), or restart to apply revocations |
+| `windows/make-shortcuts.ps1` | — | Windows | Desktop shortcuts for the local and cloud launchers |
 | `start-cursor-local.sh` | 3 | Linux/WSL | LiteLLM proxy + tunnel for Cursor |
 | `bench-claude-code.sh` | 1 | macOS | Benchmark Claude Code against local models (see [Benchmarking](#benchmarking-claude-code-harness)) |
 | `stop-all.sh` | — | Any | Kill everything |
@@ -588,23 +594,58 @@ Always run `start-server.sh` or `start-server-mac.sh` first, then pick your flow
 >
 > The `openai/<model>` prefix is a **LiteLLM routing convention** (it tells LiteLLM the backend is OpenAI-format) — it belongs in the LiteLLM config, never in a `claude --model` that points straight at Ollama or vllm-mlx. On a Mac, **Ollama is the zero-proxy path** and is what the rest of this section assumes.
 
-#### Windows / WSL2 + NVIDIA (validated 2026-07-25)
+#### Windows + NVIDIA — native, no WSL, no proxy (validated 2026-09-08)
 
-llama.cpp is OpenAI-only, so the Windows path is: **`llama-server` → LiteLLM (Anthropic bridge) → Claude Code**. One script sets up all three:
+> **This section was rewritten 2026-09-08.** It previously said *"llama.cpp is OpenAI-only,
+> so the Windows path is llama-server → LiteLLM → Claude Code."* **That is no longer true.**
+> llama.cpp [PR #17570](https://github.com/ggml-org/llama.cpp/pull/17570) (Jan 2026) added a
+> native Anthropic Messages API at `/v1/messages`, so **LiteLLM is no longer needed**:
+>
+> ```
+> before:  llama-server → LiteLLM(:4000) → Claude Code
+> after:   llama-server(:8080) → Claude Code
+> ```
+>
+> Tool use requires `--jinja`. The old WSL2 + LiteLLM path still works and is kept below,
+> but the native path is simpler and faster. `start-claude-windows.sh` is the legacy script.
 
-```bash
-./start-claude-windows.sh --dangerously-skip-permissions
-# or headless:  ./start-claude-windows.sh -p "fix the failing test in test_foo.py"
+Claude Code also [runs natively on Windows](https://code.claude.com/docs/en/setup) now
+(PowerShell or CMD, no WSL, no Node):
+
+```powershell
+irm https://claude.ai/install.ps1 | iex
 ```
 
-Or copy-paste the launch string yourself (once `llama-server` + LiteLLM are up on :8080 / :4000):
+Prebuilt CUDA binaries mean no compile — grab `llama-<build>-bin-win-cuda-13.3-x64.zip`
+plus `cudart-llama-bin-win-cuda-13.3-x64.zip` from
+[llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases), unzip both to the
+same folder, then:
 
-```bash
-ANTHROPIC_BASE_URL=http://localhost:4000 \
-ANTHROPIC_AUTH_TOKEN=local ANTHROPIC_API_KEY=local \
-claude --model qwen3.6-local --dangerously-skip-permissions \
-  --disallowedTools WebSearch WebFetch
+```powershell
+windows\claude-local.ps1                       # starts llama-server if needed, then Claude Code
+windows\claude-local.ps1 -Ncmoe 8 -Ctx 65536   # the measured optimum (see tuning table)
 ```
+
+Or drive it yourself:
+
+```powershell
+llama-server.exe -m <model>.gguf --host 127.0.0.1 --port 8080 `
+  -ngl 99 -ncmoe 8 -c 65536 -np 1 -fa on `
+  --cache-type-k q4_0 --cache-type-v q4_0 `
+  --jinja --reasoning-budget 0 -a qwen3.6-local
+
+$env:ANTHROPIC_BASE_URL='http://localhost:8080'
+$env:ANTHROPIC_AUTH_TOKEN='local'
+claude --model qwen3.6-local --disallowedTools WebSearch WebFetch
+```
+
+> **`-a <alias>` is load-bearing.** Without it the model isn't addressable by name and
+> `claude --model` won't resolve.
+>
+> **Watch for a stray `llama-server.exe`.** Recent builds default to a *router* mode, so an
+> argument-less `llama-server.exe` will happily bind :8080 and answer every request with
+> `400: model '<name>' not found`. If you see that error, check for a second process.
+
 
 > **Disable WebSearch/WebFetch.** These are Anthropic **server-side** tools (their tool `type` is `web_search_*`/`web_fetch_*`, not `function`), so llama-server rejects them with `400: 'type' of tool must be 'function'` — and they can't run against a local model anyway. `--disallowedTools WebSearch WebFetch` removes them; `start-claude-windows.sh` does this automatically.
 
@@ -676,8 +717,29 @@ J:\llama\setup-lan-firewall.ps1
 J:\llama\serve-lan.ps1
 ```
 
-`serve-lan.ps1` binds `0.0.0.0`, requires an API key from `J:\llama\api-key.txt`, and
+`serve-lan.ps1` binds `0.0.0.0`, requires one of the keys in `J:\llama\api-keys.txt`, and
 prints the exact client command with your LAN IP filled in.
+
+**Key changes don't need a server restart.** `--api-key-file` accepts many keys, one per
+line, and *every* listed key is valid at once — so pre-provision a few spares and adding
+a device or switching keys costs nothing:
+
+```
+# in use -- Mac laptop
+correct-horse-battery-staple
+
+# spares -- already valid, just start using one
+another-four-word-key
+```
+
+> **Verified:** the file is read at **startup only**. Appending a key returns `401` until
+> the server restarts — there is no reload endpoint and no SIGHUP handler. That is exactly
+> why you pre-provision spares. *Revoking* a key still needs a restart (`rotate-keys.ps1`,
+> ~40s model reload); *adding* one never does.
+
+`rotate-keys.ps1 -Show` lists the valid keys; without `-Show` it restarts to apply deletions.
+
+Per-device keys are the useful side effect — revoke one machine without disturbing the rest.
 
 **On the client (Mac/Linux)** — configure once:
 
@@ -708,7 +770,7 @@ or subnet problem gives you a clear error instead of a silent retry loop.
 
 | Control | Effect |
 |---|---|
-| `--api-key` on the server | Requests without the bearer token are rejected — a machine that can reach the port still can't use it |
+| `--api-key-file` on the server | Requests without a valid bearer token are rejected — a machine that can reach the port still can't use it |
 | `-RemoteAddress LocalSubnet` on the firewall rule | Only hosts in your own subnet can open the port at all |
 
 > **Binding `0.0.0.0` does not expose you to the internet** on its own — your router

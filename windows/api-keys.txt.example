@@ -1,0 +1,16 @@
+# llama-server API keys -- one per line. '#' starts a comment.
+# ANY key listed here is valid, so you can point a client at a different key,
+# or give a new device its own, WITHOUT restarting the server.
+#
+# The file is read at STARTUP ONLY (verified: appending a key returns 401 until
+# restart), which is why spares are pre-provisioned rather than minted on demand.
+# You only need a restart to REVOKE a key -- see rotate-keys.ps1.
+#
+# Copy to J:\llama\api-keys.txt and replace these with your own.
+
+# in use -- laptop
+correct-horse-battery-staple
+
+# spares -- already valid, just start using one
+replace-me-one-two
+replace-me-three-four
