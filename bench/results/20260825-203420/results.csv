@@ -1,0 +1,5 @@
+model,task,pass,duration_s,turns,input_tokens,output_tokens,eff_tok_per_s,note
+gemma4:26b-a4b-it-q4_K_M,01-fix-bug,PASS,89.3,6,123333,914,10.4,""
+gemma4:26b-a4b-it-q4_K_M,02-refactor,PASS,118.4,17,362383,1499,12.8,""
+gemma4:26b-a4b-it-q4_K_M,03-add-feature,PASS,194.9,15,320964,3425,17.7,""
+gemma4:26b-a4b-it-q4_K_M,04-codebase-search,PASS,95.7,12,245926,1051,11.1,""

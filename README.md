@@ -22,12 +22,18 @@ Tested on:
 | M3 Pro 36GB | **Gemma 4 26B-A4B Q4_K_M (Ollama MLX)** | **~33 tok/s** | 256K | **~17GB** |
 | M3 Pro 36GB | Gemma 4 31B Q4_K_M (dense, Ollama MLX) | **~6 tok/s** ‡ | 256K | ~18GB |
 | M3 Pro 36GB | Gemma 4 31B + MTP | n/a § | 256K | — |
+| M3 Pro 36GB | **Qwen3.8-27B Q4_K_M (dense, Ollama)** | **~82 tok/s prefill** ¶ | 256K | ~17GB |
+| M3 Pro 36GB | Muse Glimmer 30B Q4_K_M (dense, Ollama) | n/a ‖ | 128K | ~18GB |
 
 *The dense 27B model is slower than the 35B-A3B on 36GB machines due to higher memory bandwidth requirements. The 35B-A3B (MoE) is faster *and* smarter — see [Why MoE?](#why-moe-mixture-of-experts) below.
 
 † Measured 2026-07-24 on M3 Pro 36GB. Raw `mlx-lm` decodes Qwen 3.6 35B-A3B at **~48 tok/s** vs Ollama MLX's **~35 tok/s** (both matched over a ~4000-token generation) — Ollama trades ~30% decode speed for its `q4_0` KV-cache + serving convenience. Ollama's prefill is much higher (~145 vs an unreliable CLI figure for mlx-lm). Pick Ollama for ease, `mlx-lm` if you want the fastest single-stream decode.
 
 ‡ The dense 31B **swap-thrashes on 36GB** (~18GB weights leaves too little headroom) — measured ~6 tok/s, i.e. 5× slower than the 26B-A4B MoE. Not recommended on 36GB; use the 26B-A4B MoE instead.
+
+¶ Measured 2026-08-25 driving **Claude Code** (see [Benchmarking](#benchmarking-claude-code-harness)). Dense 27B loses on both axes vs the 26B-A4B MoE: **~82 tok/s prefill** (vs ~720–830) and **~5 tok/s decode** (vs ~25). A 21k-token cold start costs ~262s once per session, then generation crawls. It timed out at 900s without finishing a task the MoE completed in 89s. The `mtp` tag does not rescue it.
+
+‖ Muse Glimmer failed all attempted tasks, but on **tool calling, not speed** — it returned after 1–2 turns without invoking a single tool. Looks like an Ollama chat-template issue; retest on a newer Ollama before drawing conclusions about the model.
 
 § Ollama ships Gemma-4 MTP **only as `gemma4:31b-coding-mtp-bf16` (~62GB bf16)** — there is no quantized MTP tag, and 62GB cannot fit 36GB unified memory. The MTP speedup is therefore **not usable on a 36GB Mac** via Ollama. (llama.cpp's Q4 MTP path for Qwen is a separate option — see the MTP section.)
 
@@ -374,7 +380,7 @@ TRT-LLM's advantage grows with batched/concurrent inference. For single-user cod
 |--------|-------------|---------------|--------|-----------------|-------|
 | **mlx-lm** | **~48 tok/s (Qwen 3.6, tested)** | high | MLX | OpenAI — needs LiteLLM proxy | `pip install mlx-lm` |
 | **Ollama 0.32+** | **~33 tok/s (tested)** | **~145–244 tok/s** | Auto (MLX) | **Native Anthropic** (0.14+, no proxy) | `brew install ollama` |
-| llama.cpp | ~29 tok/s (Qwen) | ~70 tok/s | GGUF | OpenAI — needs LiteLLM proxy | `brew install llama.cpp` |
+| llama.cpp | ~29 tok/s (Qwen) | ~70 tok/s | GGUF | **Native Anthropic** (since Jan 2026, PR #17570) | `brew install llama.cpp` |
 | vllm-mlx | MLX-native, ~400 tok/s batched | Good | MLX | **Native Anthropic** (no proxy) | `pip install` from git |
 | **vLLM Metal v0.3.0-dev** | **MLX-native, batched** | **83× v0.1 TTFT** | MLX | OpenAI | Docker Desktop 4.62+ |
 
@@ -477,6 +483,7 @@ Flow 3: Cursor (Chat/Cmd+K only — Agent mode unsupported)
 | `start-claude-local.sh` | 1 | Any | Launch Claude Code with local model (auto-detects) |
 | `start-remote.sh` | 2 | Linux/WSL | Tunnel llama-server for remote access |
 | `start-cursor-local.sh` | 3 | Linux/WSL | LiteLLM proxy + tunnel for Cursor |
+| `bench-claude-code.sh` | 1 | macOS | Benchmark Claude Code against local models (see [Benchmarking](#benchmarking-claude-code-harness)) |
 | `stop-all.sh` | — | Any | Kill everything |
 
 Always run `start-server.sh` or `start-server-mac.sh` first, then pick your flow.
@@ -488,7 +495,10 @@ Always run `start-server.sh` or `start-server-mac.sh` first, then pick your flow
 > **How Claude Code talks to a local model:** Claude Code speaks **only the Anthropic Messages API** (`/v1/messages`) — it is *not* an OpenAI client. That splits local servers into two cases:
 > - **Native Anthropic — connect directly, no proxy, no prefix.** **Ollama 0.14+** and **vllm-mlx** expose `/v1/messages`. Point Claude Code straight at them with the plain model name (note: base URL has **no `/v1`**):
 >   `ANTHROPIC_BASE_URL=http://localhost:11434 ANTHROPIC_AUTH_TOKEN=local claude --model qwen3.6:35b`
-> - **OpenAI-only — needs a LiteLLM proxy.** **llama.cpp (`llama-server`), TabbyAPI, TensorRT-LLM** expose only OpenAI `/v1/chat/completions`, which Claude Code cannot consume directly. Run a [LiteLLM proxy](#cursor-limited--agent-mode-unsupported) to translate Anthropic↔OpenAI, then point Claude Code at the proxy.
+> - **OpenAI-only — needs a LiteLLM proxy.** **TabbyAPI and TensorRT-LLM** expose only OpenAI `/v1/chat/completions`, which Claude Code cannot consume directly. Run a [LiteLLM proxy](#cursor-limited--agent-mode-unsupported) to translate Anthropic↔OpenAI, then point Claude Code at the proxy.
+>
+> **Update (2026-08):** **llama.cpp no longer belongs in the proxy list.** `llama-server` gained a native Anthropic Messages API in [PR #17570](https://github.com/ggml-org/llama.cpp/pull/17570) (January 2026) — `POST /v1/messages` plus `/v1/messages/count_tokens`, with streaming, tool use, vision, and extended thinking. Verified present in the Homebrew build here (`b9960`). Point Claude Code straight at `llama-server` with no proxy:
+> `ANTHROPIC_BASE_URL=http://127.0.0.1:8080 ANTHROPIC_AUTH_TOKEN=local claude --model <name>`
 >
 > The `openai/<model>` prefix is a **LiteLLM routing convention** (it tells LiteLLM the backend is OpenAI-format) — it belongs in the LiteLLM config, never in a `claude --model` that points straight at Ollama or vllm-mlx. On a Mac, **Ollama is the zero-proxy path** and is what the rest of this section assumes.
 
@@ -611,6 +621,15 @@ Best for tab completion with local models:
 
 \*Nemotron 3 Nano 4B uses a hybrid Mamba-2 + Transformer architecture (mostly Mamba-2 layers with just 4 attention layers). It's significantly faster than the 9B, uses only ~5GB VRAM, and supports 262K context. The tradeoff is lower coding quality — it's designed for edge agents and local assistants rather than deep reasoning. Use it when you want maximum speed or need the longer context window. Run it with `./start-server.sh nemotron`.
 
+### August 2026 dense models: benchmark winners, agent-loop losers
+
+Qwen3.8-27B and Muse Glimmer 30B both beat Gemma 4 26B-A4B on published coding benchmarks
+(Qwen3.8-27B: SWE-bench Pro 61.7, Terminal Bench 2.1 73.0, LiveCodeBench v6 90.3; Artificial
+Analysis scores it 52 vs 38 for Qwen3.6-27B). Neither could drive Claude Code on a 36GB M3 Pro —
+[measured, not assumed](#results--m3-pro-36gb-measured-2026-08-25). Benchmark scores measure what a
+model knows per turn; local agentic coding is decided by how fast you can *feed* it 21k tokens of
+system prompt, every turn. Keep using the MoE.
+
 ### Why not the dense 27B on Apple Silicon?
 
 On a 36GB M3 Pro, the dense 27B model uses ~18GB for weights + 2.3GB for KV cache, leaving very little headroom. In practice this causes **swap thrashing** (~1.7 tok/s) when other apps are running. The 35B-A3B MoE is larger on disk (22GB) but faster at inference because it only activates 3B parameters per token.
@@ -624,6 +643,314 @@ The **Qwen3.5-35B-A3B** sits roughly in the **Sonnet 4.5 tier** — it beats Son
 The **Qwen3.5-9B** sits in the **GPT-4o-mini / Haiku tier**. Good for fast completions, quick edits, boilerplate, and explanations.
 
 All of these still fall short of Claude Opus 4.7 on long-horizon agentic workflows, multi-file refactors, and deep reasoning. Best strategy: route the daily 70-80% of edits to a local model and reserve Opus for the hard 20%.
+
+## Benchmarking (Claude Code harness)
+
+Tok/s tells you how fast a model types, not whether it can finish a job. `bench-claude-code.sh`
+drives **Claude Code itself** against a local model over Ollama's native Anthropic endpoint and
+scores it on small agentic tasks that either pass or fail — no vibes, no vendor numbers.
+
+```bash
+./bench-claude-code.sh --list          # show candidate models + task list, no downloads
+./bench-claude-code.sh --pull-only     # download the candidates (~20GB each)
+./bench-claude-code.sh                 # full matrix
+./bench-claude-code.sh --models "qwen3.8:27b-mtp-q4_K_M" --tasks "01 04"
+```
+
+### Candidate models (36GB Apple Silicon, August 2026)
+
+| Ollama tag | Size | Why it's in the list |
+|-----------|------|----------------------|
+| `qwen3.8:27b-mtp-q4_K_M` | 18GB | Aug 2026 quality leader, **with MTP speculative decoding at Q4** |
+| `qwen3.8:27b-q4_K_M` | 18GB | Same weights, MTP off — isolates how much MTP actually buys |
+| `muse-glimmer:30b-q4_K_M-dflash` | 20GB | Meta's local-agent model + DFlash drafter bundled in |
+| `gemma4:26b-a4b-it-q4_K_M` | 17GB | The incumbent from the table above — the baseline to beat. **It won: 4/4.** |
+
+> **Qwen 3.8 makes MTP *fit*, which turned out not to be the problem.** Gemma 4's MTP was unusable
+> on a 36GB Mac (bf16-only, ~62GB); Qwen 3.8 ships `qwen3.8:27b-mtp-q4_K_M` at **18GB**. It loads
+> fine — and it still timed out, because MTP speeds up generation while this workload is bound by
+> prompt ingestion. See [Results](#results--m3-pro-36gb-measured-2026-08-25).
+>
+> Both Qwen 3.8 and Muse Glimmer are **dense**, which on past evidence (the dense Gemma 4 31B at
+> ~6 tok/s) is the risk to watch. That is exactly what this harness is for: if a dense 27B answers
+> correctly at 12 tok/s while a MoE answers wrongly at 35 tok/s, the tok/s column was lying to you.
+
+### Tasks
+
+Each task is a throwaway fixture repo plus an **external verifier** that the model never sees:
+
+| Task | What it exercises | Pass condition |
+|------|-------------------|----------------|
+| `01-fix-bug` | Read code, run tests, diagnose, fix | `unittest` suite green — **and** `tests/` unmodified (checksummed, so "fix the test" fails) |
+| `02-refactor` | Multi-file rename across source + callers + tests | Zero occurrences of the old name, suite still green |
+| `03-add-feature` | Add a CLI flag without regressing existing output | New `--json` output parses and matches; plain output byte-identical; README updated |
+| `04-codebase-search` | Search/tool loop over a 30-file haystack | Correct value written to `ANSWER.txt` |
+
+Tasks 01 and 03 are deliberately cheat-resistant — a model that edits the tests or changes the
+existing output to make things pass gets a FAIL, which is the failure mode small local models hit
+most often.
+
+### Results — M3 Pro 36GB, measured 2026-08-25
+
+```
+Model                              01-fix-bug      02-refactor     03-add-feature  04-codebase     Pass  Eff tok/s
+gemma4:26b-a4b-it-q4_K_M           PASS 89s        PASS 118s       PASS 195s       PASS 96s         4/4       13.0
+muse-glimmer:30b-q4_K_M-dflash     FAIL 232s       FAIL 247s       FAIL 316s       (abandoned)      0/3        1.5
+qwen3.8:27b-mtp-q4_K_M             TIMEOUT 905s    (not run)       (not run)       (not run)        0/1          -
+```
+
+| Model | Type | Result | What actually happened |
+|-------|------|--------|------------------------|
+| **Gemma 4 26B-A4B** | **MoE** | **4/4 PASS**, 8 min total | Clean: every run `is_error: false`, `stop_reason: end_turn`, all verifiers silent. Fixed the source rather than the checksummed tests, and added `--json` without disturbing existing output. |
+| Muse Glimmer 30B | Dense | 0/3 | **Inert, not slow.** 1–2 turns, ~200–700 output tokens, zero tool calls. Its entire reply to the fix-the-tests prompt was *"Hi! How can I help you today?"* — it answered a greeting nobody sent. |
+| Qwen 3.8 27B (MTP) | Dense | 0/1, timed out | **Slow on both axes.** ~262s one-time cold-start prefill (~82 tok/s), then ~5 tok/s decode. Gemma solved the same task in 6 turns and 89s. |
+
+**The incumbent won, and it wasn't close.** Both August 2026 releases that beat Gemma 4 on every
+published benchmark are unusable as Claude Code drivers on this hardware — for two completely
+different reasons.
+
+**The generalizable finding: the MoE beats the dense model on *both* axes, by roughly 10x on prefill
+and 5x on decode.** Measured from `llama-server`'s own slot timings during these runs:
+
+| | Prefill (prompt processing) | Decode (generation) |
+|---|---|---|
+| **Gemma 4 26B-A4B (MoE)** | **~720–830 tok/s** → ~26s for a 21k prompt | **~25 tok/s** |
+| Qwen3.8-27B (dense) | ~82 tok/s → **~262s** for the same prompt | **~5 tok/s** |
+
+That is what a 4B-active MoE buys you over a 27B-dense on 36GB unified memory, and it is why the
+dense model timed out: **~262s of cold-start prefill, and then every turn generating at ~5 tok/s.**
+It loses twice, not once.
+
+> **Prompt caching is NOT broken — it is working.** It is tempting to blame the 21k-token prompt
+> being re-sent each turn, but the server logs show Ollama's context checkpoints doing their job:
+> ```
+> slot create_check: task 204 | created context checkpoint 1 of 32 (n_tokens = 21316, 233 MiB)
+> slot   operator(): task 248 | cached n_tokens = 21824, memory_seq_rm [21824, end)
+> ```
+> Turn 2 reused the cache and prefilled only the delta. **The 262s is a one-time cold-start cost per
+> session, not a per-turn cost** — after that, dense models are limited by decode speed. (An earlier
+> draft of this section claimed a per-turn prefill wall; the slot timings disprove it.)
+
+> **MTP did not help.** Multi-token prediction accelerates generation, and at ~5 tok/s there was
+> something to accelerate — but it did not close a 5x gap. Lowering context 65536 → 32768 changed
+> prefill only marginally (87 → 82 tok/s), ruling out swap pressure as the primary cause.
+
+**Two honest caveats.** Glimmer's failure looks like a chat-template / tool-calling integration bug
+in Ollama rather than a statement about the model — it is worth retesting on a later Ollama, and it
+is *not* evidence the model is bad. And Qwen 3.8 never completed a task, so its **quality is
+unmeasured** here; only its cost is known. It may well be smarter per turn — it just cannot afford
+the turns on this machine.
+
+Full per-run JSON, stderr, and verifier output land in `bench/results/<timestamp>/`, and
+`results.csv` has the raw rows.
+
+### Prompt caching: what the ecosystem does, and whether it's worth your time
+
+Everyone running a coding agent against a local model hits the same question — the client re-sends
+tens of thousands of tokens every turn, so how do you avoid re-ingesting them? The state of the art
+as of August 2026:
+
+| Lever | What it does | Worth it here? |
+|-------|--------------|----------------|
+| **Ollama context checkpoints** | Snapshots the KV state at intelligent points and reuses shared prefixes across requests; 0.33.0 improves prefill restore points and fixes hangs when agent clients cancel long prefills — but as of 2026-08-26 it is still **`v0.33.0-rc4`** (prerelease, tagged 2026-08-21). Latest stable is v0.32.15, so Homebrew is *not* lagging | **Already on and already working** — verified in our slot logs. 0.33.0 is not in Homebrew yet (stable is 0.32.15) |
+| **Long `keep_alive`** | Ollama unloads after 5 min by default, and unloading wipes the cache | **Yes — do this.** `bench-claude-code.sh` sets 60m; without it every pause costs a full cold start |
+| **`CLAUDE_CODE_ATTRIBUTION_HEADER=0`** | Claude Code prepends an attribution block to the system prompt; because cache reuse depends on a *stable token prefix*, a varying header at position 0 can invalidate everything after it | **Cheap enough to just set.** One env var, confirmed present in Claude Code 2.1.245. Reported to flip llama.cpp from "full prompt re-processing" to restoring a checkpoint in ~500ms |
+| **llama.cpp `--cache-reuse`, `--cache-ram`, `--slot-save-path`** | KV shifting across shared chunks, a larger host-RAM prompt cache, and save/restore of slots to disk for cross-*session* persistence | Only if you drive `llama-server` directly. Ollama covers this path already |
+
+**Is it worth solving? Mostly no — because it is already solved, and it was never the real problem.**
+
+The honest accounting for this machine:
+
+- **Prefill caching is working**, so the ~21k-token ingest is a **one-time ~26s (MoE) or ~262s
+  (dense 27B) cost per session**, not a per-turn tax. Turn 2 onward reuses the checkpoint.
+- **The remaining cost is decode**, and no caching trick touches that. Even with prefill driven to
+  zero, a dense 27B still generates at ~5 tok/s here — several hundred output tokens per agent turn
+  means ~60–120s per turn regardless.
+- **So prompt caching cannot rescue a dense model on 36GB, and the MoE does not need rescuing**
+  (~26s cold start, ~15s/turn steady state). It changes no model-selection decision.
+
+Do the two free things — long `keep_alive` (already in the script) and `CLAUDE_CODE_ATTRIBUTION_HEADER=0`
+— and upgrade Ollama when 0.33.0 leaves release-candidate status (it was still `rc4` on 2026-08-26; Homebrew lands new stables within ~a day). Anything beyond that is optimising the half of the
+problem that isn't hurting.
+
+### Is Ollama the right harness? (engine landscape, August 2026)
+
+Ollama did its job in these runs — native Anthropic endpoint, MLX backend, and prompt caching that
+demonstrably worked. But two of our three results are arguably *engine* results rather than *model*
+results, which is reason to look around:
+
+| Engine | Anthropic `/v1/messages` | Caching / speed story | Worth testing? |
+|--------|--------------------------|------------------------|----------------|
+| **Ollama 0.32.15** (current) | Native (since 2026-01-16) | Context checkpoints, verified working. 0.33.0 is still at `rc4` (2026-08-21) — Homebrew tracks stable, so 0.32.15 *is* current | **Incumbent.** Easiest, unattended, menu-bar autostart |
+| **llama.cpp** | **Native since Jan 2026** (PR #17570) — *not* proxy-only any more | `--cache-reuse`, `--cache-ram`, `--slot-save-path` for cross-session KV persistence | Yes, if you want fine control. Already installed here |
+| **LM Studio 0.4.1+** | Native `/v1/messages` | GGUF + MLX; headless server mode (`llmster`) since Jan 2026 removed the GUI-only limitation | Maybe — GUI model browser, otherwise similar to Ollama |
+| **vllm-mlx** | Native (both APIs from one process) | Continuous batching, paged KV, prefix caching, SSD-tiered cache, MCP tool calling | Yes — already in this guide, never benchmarked with the harness |
+| **Rapid-MLX** | Native `/v1/messages` | Claims **4.2x Ollama**, 0.08s cached TTFT, ~324 tok/s prefill @8K, ~40 tok/s decode (MTP on by default), **17 tool parsers**, radix-tree + **DeltaNet RNN snapshots** | **The most interesting experiment** — see below |
+| vMLX / oMLX | Varies | Prefix caching, paged KV, SSD KV cache aimed at coding agents | Newer, less proven |
+
+**Why Rapid-MLX is the one worth trying.** Its two headline features map startlingly well onto the
+exact two failures measured above:
+
+- **"DeltaNet RNN snapshots"** ↔ Qwen3.8-27B is a *hybrid* architecture (`Gated DeltaNet → FFN`
+  blocks with periodic gated attention). Hybrid/linear-attention models are exactly the class that
+  historically defeats naive KV-cache reuse. A cache designed for DeltaNet is aimed straight at our
+  ~82 tok/s prefill and ~5 tok/s decode.
+- **"17 tool parsers / 100% tool calling"** ↔ Muse Glimmer returned 1–2 turns with **zero tool
+  calls**. If that was Ollama's chat template rather than the model, a purpose-built tool parser is
+  the thing that would fix it.
+
+It also lists `qwen3.8-27b-4bit` (~20GB peak RSS) as its 32GB+ tier — i.e. it explicitly targets the
+model that timed out here.
+
+> **Treat all of those numbers as vendor claims until this harness reproduces them.** "4.2x faster
+> than Ollama" is a project's own README, measured on unstated hardware with an unstated model. The
+> whole point of `bench-claude-code.sh` is that engine claims and model leaderboards are exactly the
+> things that did not survive contact with a 36GB M3 Pro.
+
+**Recommendation:** keep Ollama as the default — it is the easiest unattended server and its caching
+works. Then run one controlled experiment: same model, same tasks, `--base-url` pointed at Rapid-MLX
+or vllm-mlx. Because the harness holds the tasks, verifiers, and prompts fixed, swapping only the
+engine gives a clean answer to "was that the model's fault or Ollama's?" — which is currently the
+single biggest open question in these results.
+
+```bash
+# Engine A (incumbent)
+./bench-claude-code.sh --models "gemma4:26b-a4b-it-q4_K_M" --tasks "01 02"
+
+# Engine B — same model, same tasks, different server
+./bench-claude-code.sh --base-url http://localhost:8000 \
+  --models "mlx-community/gemma-4-26B-A4B-it-4bit" --tasks "01 02"
+```
+
+### Engine A/B: Ollama vs Rapid-MLX (tested 2026-08-25)
+
+Rapid-MLX advertises "4.2x faster than Ollama, 0.08s cached TTFT, 100% tool calling". Its own
+`rapid-mlx recipe` nominates `qwen3.8-27b-4bit` for this exact 36GB Mac at **~41 tok/s** — the very
+model Ollama could not finish a task with. Tested head-to-head: same task (`01-fix-bug`), same
+verifier, same 900s cap, only the engine swapped (`--base-url`).
+
+| Engine / config | Prefix reuse | Per-turn cost | Result |
+|-----------------|--------------|---------------|--------|
+| **Ollama 0.32.15** | **21,824 tokens** reused via context checkpoints | ~262s cold, then decode-bound at ~5 tok/s | TIMEOUT |
+| Rapid-MLX, recipe defaults | **40 tokens** — `cache_store … stored=False` | 229–246s **every turn**, 0.3–0.8 tok/s | (killed) |
+| Rapid-MLX + MTP + 6.5GB cache | 40 tokens — `stored=True`, but lookup still misses | 227s / 254s, 0.3–1.0 tok/s | TIMEOUT, 2 turns |
+
+**Ollama won.** Neither engine finished, but Ollama reused ~21.8k cached tokens per turn while
+Rapid-MLX re-prefilled ~21k every turn.
+
+Two distinct defects surfaced, both invisible without reading the engine log:
+
+1. **The prefix cache silently stored nothing.** Rapid-MLX defaults to a **bf16** KV cache, so one
+   21k-token entry is ~1.47GB — over its own memory-aware limit of 1208MB (20% of RAM):
+   ```
+   WARNING: Cache entry too large: 1468.2MB exceeds limit 1208.1MB
+   [cache_store] tokens=21226 stored=False
+   ```
+   Fixable with `--cache-memory-percent 0.35` (note: a **fraction**, not a percentage — passing `35`
+   raises `ValueError: max_memory_percent must be in (0, 1]`). Ollama avoids this entirely by
+   defaulting to a **q4_0** KV cache, ~6x smaller, so its checkpoints are ~233MB and always fit.
+
+2. **Even once stored, lookup matched only 40 tokens.** Its radix index needs an exact token-prefix
+   match, and Claude Code's prompt varies within the first ~40 tokens between turns, so a stored
+   21,219-token entry was never reused. Ollama's **position-based context checkpoints tolerate that
+   early variation** — which looks like a genuine architectural advantage for agent workloads
+   rather than luck.
+
+**MTP could not help.** Enabling it (`--speculative-config '{"method":"mtp","num_speculative_tokens":3}'`)
+worked — it even injects a GatedDeltaNet chunk-split rollback for this hybrid architecture — but
+speculative decoding accelerates generation, and ~97% of each turn was prefill that should not have
+been happening. Note also that the defaults **disable spec decode for hybrid models**
+(`rapid-mlx info` shows `Spec decode: ✗ disabled (hybrid arch)`, `MTP path: sidecar (opt-in)`), so
+the recipe's ~41 tok/s headline is not what the recommended command actually delivers. DFlash is
+unavailable at 4-bit (its eligibility check requires ≥8-bit, and an 8-bit build is ~30GB).
+
+**Verdict: keep Ollama.** Its caching is better suited to a 21k-token agent prompt that shifts
+slightly every turn. Rapid-MLX's cache design looks tuned for stable-prefix chat. This does not make
+it a bad engine — it makes it the wrong engine for *this* workload, which is the sort of thing only
+a fixed-task harness can tell you.
+
+### Two things the Claude Code UI implies that are not true locally
+
+Both measured on this setup (2026-08-26, Gemma 4 26B-A4B via Ollama), both contradicting what the
+interface suggests.
+
+**1. `--bare` cuts context ~30x, and you almost certainly want it for local models.**
+
+| Config | Input tokens for a trivial prompt |
+|--------|-----------------------------------|
+| Default (MCP servers + plugins + skills installed) | **20,240** |
+| `claude --bare` | **663** |
+
+Capturing the actual HTTP request shows where the weight is: a **6,646-character system prompt and
+28 tool definitions**. The *tools*, not the system prompt, are the bulk of it — and every MCP server
+you have installed (browser automation, Gmail/Calendar/Drive, mobile, Notion) adds more.
+
+This is not academic. Asked to check email, a 26B model instead announced *"Security Audit of
+Codebase"*, called a mobile-automation tool, and finally just recited its own tool list. That is
+what a small model does when the tool menu outweighs the request. `--bare` fixes it:
+
+```bash
+ANTHROPIC_BASE_URL=http://localhost:11434 ANTHROPIC_AUTH_TOKEN=local \
+CLAUDE_CODE_ATTRIBUTION_HEADER=0 \
+claude --bare --model gemma4:26b-a4b-it-q4_K_M
+```
+
+`--bare` skips hooks, LSP, and plugins but **keeps the file and shell tools working** (verified: it
+created a file correctly in 3 turns at 2,218 total input tokens). Skills still resolve explicitly,
+so use `/himalaya-email` rather than hoping the model infers the right tool from a 40-item menu.
+**Name the tool; don't make a small model choose.** Finer-grained alternatives:
+`--disallowedTools "mcp__claude-in-chrome__*"`, or `--mcp-config <minimal.json>`.
+
+> **This likely biased the benchmark above.** Every result in this section ran with the full ~21k
+> context. At Qwen3.8-27B's measured ~82 tok/s prefill, a `--bare` run would cut its cold start from
+> ~262s to **~27s** — a 10x reduction in the exact cost that timed it out. Glimmer's "1 turn, zero
+> tool calls" is also the classic signature of a model swamped by tool definitions. **The dense-model
+> verdict above should be treated as provisional until re-run with `--bare`.**
+
+**2. Reasoning effort does not reach a local model.**
+
+Claude Code shows "medium effort" and sends it on every request as a `thinking` field:
+
+```json
+"thinking": {"type": "adaptive", "display": "omitted"}
+```
+
+But Gemma 4 26B-A4B — which Ollama reports as `["completion","vision","tools","thinking"]`, i.e.
+thinking-capable — returned **`thinking_tokens: 0` in all 7 benchmark runs**, including a 17-turn
+refactor. Ollama's Anthropic-compat layer does not appear to map Anthropic's `thinking` parameter
+onto its own think mode. The effort indicator accurately describes what Claude Code *sent* and
+misleads about what *happened*. To get reasoning from a local model, enable it at the Ollama layer
+(see [Thinking mode](#thinking-mode)) — the CLI effort control will not do it for you.
+
+### Notes on running it
+
+- **Ollama must be recent enough for the model.** Pulling Qwen 3.8 on Ollama 0.32.1 fails with
+  `Error: pull model manifest: 412` — the registry refuses new manifests to old clients. `brew
+  upgrade ollama` (0.32.15 worked). The error text says "requires a newer version" but is easy to
+  mistake for a network or auth problem.
+
+- **Context length is the #1 failure cause.** Measured on this setup, Claude Code's system prompt
+  plus tool definitions costs **~20,200 input tokens before your prompt is even added** (one trivial
+  one-turn request billed 20,240 input tokens). Ollama's 4096-token default is therefore hopeless —
+  the model silently truncates rather than erroring. The script starts Ollama with
+  `OLLAMA_CONTEXT_LENGTH=65536`; 32768 is the practical floor and leaves little room for file reads.
+  If Ollama is *already* running the script says so and uses it as-is — kill it first if you want
+  the script's settings.
+- **That 20k prefill dominates the timings.** Every turn re-prefills it, so the `Eff tok/s` column is
+  end-to-end (output tokens ÷ total API time), not raw decode speed. It will read lower than the
+  decode figures in the Performance table — that is the point: it is what the agent loop actually
+  feels like. Models with high prefill throughput (Ollama measured ~145–244 tok/s prefill) do
+  disproportionately well here.
+- **Ignore `total_cost_usd` in the JSON** — Claude Code prices local tokens as if they were API
+  tokens. It is useful only as "what this run would have cost on the API" (the trivial test above:
+  $0.11). Local runs cost nothing but electricity.
+- Claude Code prints `[claude-code:unrecognized_model]` to stderr for any non-Anthropic model name.
+  It is a harmless warning, not a failure — runs complete normally.
+- Runs use `--dangerously-skip-permissions` so they don't block on prompts. Every run happens inside
+  a throwaway fixture directory under `bench/results/`, never in your real repo.
+- Models are unloaded between candidates (`keep_alive: 0`) so two 18GB models never share 36GB.
+- `--timeout` (default 900s) caps each run; a killed run is recorded as `TIMEOUT` rather than
+  silently hanging the matrix.
 
 ## Troubleshooting
 

@@ -1,0 +1,6 @@
+FAIL: 'fetch_data' still present:
+./tests/test_store.py:3:from store.source import fetch_data
+./tests/test_store.py:9:        self.assertEqual(len(fetch_data()), 3)
+./tests/test_store.py:12:        self.assertEqual(len(fetch_data(2)), 2)
+./store/cli.py:3:from store.source import fetch_data
+./store/cli.py:11:        print(len(fetch_data()))
