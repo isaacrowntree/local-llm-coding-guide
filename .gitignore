@@ -8,3 +8,6 @@
 # Python bytecode
 __pycache__/
 *.pyc
+
+# LAN client config (contains the llama-server API key)
+.llama-lan.conf

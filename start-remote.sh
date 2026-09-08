@@ -9,9 +9,16 @@
 #   ANTHROPIC_AUTH_TOKEN=local \
 #   claude --model qwen3.6:35b
 #
-# NOTE: Claude Code speaks only the Anthropic API. Tunnel a native-Anthropic
-# endpoint (Ollama 0.14+ on :11434) or a LiteLLM proxy — NOT bare llama-server,
-# which is OpenAI-only and won't work with Claude Code directly.
+# NOTE (updated 2026-09): llama-server now serves the Anthropic Messages API
+# natively at /v1/messages (llama.cpp PR #17570), so tunnelling bare llama-server
+# DOES work with Claude Code. Start it with --jinja for tool use. Ollama 0.14+
+# and a LiteLLM proxy remain valid targets too.
+#
+# THIS SCRIPT PUBLISHES YOUR SERVER TO THE PUBLIC INTERNET via Cloudflare.
+# If the client is just another machine on your own network (e.g. a MacBook),
+# use the LAN-only path instead -- no tunnel, lower latency, far smaller
+# exposure: serve-lan.ps1 on the server + ./connect-lan-mac.sh on the client.
+# See "LAN-only access" in README.md.
 #
 
 set -e

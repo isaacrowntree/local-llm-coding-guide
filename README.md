@@ -566,7 +566,8 @@ Flow 3: Cursor (Chat/Cmd+K only — Agent mode unsupported)
 | `start-vllm-mlx-mac.sh` | 1 | macOS | Start vllm-mlx with Gemma 4 (native Anthropic API) |
 | `start-claude-local.sh` | 1 | Any | Launch Claude Code with local model (auto-detects Ollama) |
 | `start-claude-windows.sh` | 1 | Linux/WSL | **Claude Code full stack: llama-server (`-ncmoe` headroom) + LiteLLM + `claude`** |
-| `start-remote.sh` | 2 | Linux/WSL | Tunnel llama-server for remote access |
+| `start-remote.sh` | 2 | Linux/WSL | Tunnel llama-server for remote access (**public internet** — prefer the LAN path below) |
+| `connect-lan-mac.sh` | 2 | macOS/Linux | **Connect Claude Code to llama-server on another LAN machine** (API key + preflight check) |
 | `start-cursor-local.sh` | 3 | Linux/WSL | LiteLLM proxy + tunnel for Cursor |
 | `bench-claude-code.sh` | 1 | macOS | Benchmark Claude Code against local models (see [Benchmarking](#benchmarking-claude-code-harness)) |
 | `stop-all.sh` | — | Any | Kill everything |
@@ -618,6 +619,109 @@ claude --model qwen3.6-local --dangerously-skip-permissions \
 > Fewer CPU experts = faster decode but less VRAM. `start-claude-windows.sh` defaults to `NCMOE=16`, `CTX=40960` (enough for Claude Code's ~25K prompt), and `REASONING=0` (thinking off — fastest, best for the tool loop; set `REASONING=medium` for a capped 1536-token thinking budget, or `-1` for unlimited).
 
 > **Does it actually work?** Yes — validated on this RTX 4070 Ti: pointed at a small project with a failing test, the local model drove the full agent loop (read → edit → run `pytest` → report) and fixed the bug with correct, documented code. Tool-calling held up on the 2-bit quant. Expect it to be slow and to need the `-ncmoe` headroom above; it is genuinely usable for the daily small-edit 70–80%, not the hard 20%.
+
+##### Tuning for a single agent (measured 2026-09-08, RTX 4070 Ti 12GB)
+
+All at `-ncmoe 8`, `-np 1`, Qwen3.6-35B-A3B IQ2_M, `q4_0` KV cache. Decode measured
+over a 300-token generation; VRAM is total card usage including ~2.4GB of desktop.
+
+| `-c` (context) | VRAM used | Free | Decode |
+|---------------:|----------:|-----:|-------:|
+| 40,960 | 10273 MB | 2009 MB | 99.4 tok/s |
+| **65,536** | **10783 MB** | **1499 MB** | **100.5 tok/s** |
+| 98,304 | 11279 MB | 1003 MB | **48.2 tok/s** |
+| 131,072 | 11833 MB | 449 MB | unsafe — OOM risk under load |
+
+> **64K is the knee, and it is sharp.** Going from 64K to 96K *halves* decode speed
+> while buying context you will rarely use — the KV cache crowds the card and the
+> whole thing slows down. Context costs **speed**, not just memory, which is the part
+> that surprises people. Below 64K you gain nothing: 40K and 64K decode identically.
+>
+> **`-ncmoe` is the other dial.** At `-ncmoe 16` (the old default) decode was ~40 tok/s;
+> `-ncmoe 8` gives **~100 tok/s** — a 2.5× win — and still leaves 1.5GB free at 64K.
+> Fewer CPU-resident experts is faster *and* uses more VRAM, so it trades against `-c`.
+>
+> **Claude Code's 1M-token window is irrelevant locally.** At ~650 tok/s prefill, a
+> 1M-token context would spend **~26 minutes** prefilling before the first token. Even
+> 128K is ~3.4 minutes cold. The binding constraint is time, not memory — which is why
+> the recommended default is 64K, not "as much as fits".
+
+**Recommended single-agent defaults** (now baked into `serve-lan.ps1` and `claude-local.ps1`):
+
+```
+-ngl 99 -ncmoe 8 -c 65536 -np 1 -fa on
+--cache-type-k q4_0 --cache-type-v q4_0
+--jinja --reasoning-budget 0 -a qwen3.6-local
+```
+
+`--reasoning-budget 0` matters as much as the rest: thinking tokens re-prefill every
+turn, so leaving it on is a large, invisible tax on an agentic loop.
+
+#### LAN-only access (serve the Windows box to your Mac)
+
+If the client is another machine on your own network, do **not** use the Cloudflare
+tunnel in `start-remote.sh` — that publishes your GPU to the public internet. Serve it
+on the LAN instead: lower latency, no third party, far smaller exposure.
+
+`llama-server` speaks the Anthropic Messages API natively, so the whole path is just
+**llama-server → Claude Code across the network**. No LiteLLM, no tunnel.
+
+**On the serving machine (Windows):**
+
+```powershell
+# once, from an ELEVATED PowerShell -- opens the port to the local subnet only
+J:\llama\setup-lan-firewall.ps1
+
+# each time
+J:\llama\serve-lan.ps1
+```
+
+`serve-lan.ps1` binds `0.0.0.0`, requires an API key from `J:\llama\api-key.txt`, and
+prints the exact client command with your LAN IP filled in.
+
+**On the client (Mac/Linux)** — configure once:
+
+```bash
+cat > ~/.llama-lan.conf <<'CONF'
+LLAMA_HOST=192.168.5.195
+LLAMA_KEY=llk_your_key_here
+LLAMA_PORT=8080
+LLAMA_MODEL=qwen3.6-local
+CONF
+chmod 600 ~/.llama-lan.conf
+```
+
+Then every time, with no arguments and nothing to edit:
+
+```bash
+./connect-lan-mac.sh                      # just runs Claude Code
+./connect-lan-mac.sh -p "fix the test"    # extra args pass through
+```
+
+Config resolves from environment → `./.llama-lan.conf` → `~/.llama-lan.conf`, so you can
+override per-project. `.llama-lan.conf` is gitignored — the key never enters the repo.
+
+The script verifies reachability *and* the key before launching Claude Code, so a firewall
+or subnet problem gives you a clear error instead of a silent retry loop.
+
+**Two independent controls keep this local:**
+
+| Control | Effect |
+|---|---|
+| `--api-key` on the server | Requests without the bearer token are rejected — a machine that can reach the port still can't use it |
+| `-RemoteAddress LocalSubnet` on the firewall rule | Only hosts in your own subnet can open the port at all |
+
+> **Binding `0.0.0.0` does not expose you to the internet** on its own — your router
+> won't forward the port unless you add a port-forward or DMZ entry. Don't.
+>
+> **Traffic is plain HTTP**, so prompts and code cross the network unencrypted. Fine on
+> a home LAN you control; not fine on shared or public Wi-Fi. `llama-server` accepts
+> `--ssl-key-file`/`--ssl-cert-file` if you want TLS.
+>
+> **Check your network category.** If Windows classifies the interface as *Public*
+> (`Get-NetConnectionProfile`), it applies stricter defaults. The `LocalSubnet` scope
+> still contains the rule, but on a genuinely untrusted network "local subnet" means
+> everyone else on it — only do this on a network you own.
 
 **Flow 1: Local (same machine — macOS/Ollama)**
 
