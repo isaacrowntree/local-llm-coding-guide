@@ -568,6 +568,7 @@ Flow 3: Cursor (Chat/Cmd+K only — Agent mode unsupported)
 | `start-claude-windows.sh` | 1 | Linux/WSL | **Claude Code full stack: llama-server (`-ncmoe` headroom) + LiteLLM + `claude`** |
 | `start-remote.sh` | 2 | Linux/WSL | Tunnel llama-server for remote access (**public internet** — prefer the LAN path below) |
 | `connect-lan-mac.sh` | 2 | macOS/Linux | **Connect Claude Code to llama-server on another LAN machine** (API key + preflight check) |
+| `windows/serve-rpc.ps1` | 3 | Windows | **Distributed inference** — split one model across this GPU + a remote `rpc-server` peer |
 | `windows/claude-local.ps1` | 1 | Windows | **Claude Code against the local model** — starts llama-server if needed |
 | `windows/claude-cloud.ps1` | — | Windows | Claude Code against the Anthropic cloud (clears `ANTHROPIC_*` so it can't be hijacked) |
 | `windows/serve-lan.ps1` | 2 | Windows | Serve the model to your LAN (`--api-key-file`, binds `0.0.0.0`) |
@@ -937,6 +938,33 @@ This is about *capability*, not speed — for tok/s and VRAM see [Performance](#
 Two honesty notes that don't go stale:
 - **Quantization tax.** The 12GB quality pick runs Qwen3.6-35B-A3B at ~2-bit (UD-IQ2_M). Treat the 73.4% as an *architecture ceiling*, not what you'll get locally — measure the gap, don't assume it away.
 - **The frontier still wins the hard 20%.** All local picks fall short of frontier models (Claude Opus-class) on long-horizon agentic workflows, multi-file refactors, and deep reasoning. Best strategy: route the daily 70–80% of edits to a local model, reserve a frontier API for the hard 20% (see [Hybrid Local + Cloud](#tangential-hybrid-local--cloud-agents)).
+
+## Distributed inference (RPC) — running a model bigger than one machine
+
+A 12GB card holds Qwen3.6-35B-A3B only at **IQ2_M** (2.7 bits/weight), where
+quantisation damage starts to affect tool-call formatting. llama.cpp's RPC backend
+splits one model's layers across machines, pooling memory:
+
+```
+PC (12GB VRAM)  +  Mac (36GB unified)  =  ~38GB usable  ->  up to Q6_K (29.3GB)
+```
+
+See **[MAC-RPC-SETUP.md](MAC-RPC-SETUP.md)** for the full peer setup, including the
+macOS firewall specifics.
+
+> **Try the simpler options first.** RPC pays *per-token network latency* — every
+> token crosses the wire — and the model runs at the pace of its slowest shard.
+> Two alternatives usually win:
+>
+> 1. **Q4 on the PC alone with a high `-ncmoe`.** This is a 3B-active MoE, so
+>    CPU-resident experts are cheap (measured: `-ncmoe 8` gives ~100 tok/s), and
+>    CPU transfers happen at PCIe speed rather than over Wi-Fi.
+> 2. **Q5_K_M on the Mac alone** (26.5GB in 36GB). If this runs without swapping,
+>    the Mac already beats the PC on quality with no network and no experimental
+>    backend — and RPC only earns its keep at Q6 and above.
+>
+> The RPC backend is experimental upstream, and peers need compatible llama.cpp
+> builds (there is no version negotiation). Benchmark before committing to it.
 
 ## Benchmarking (Claude Code harness)
 

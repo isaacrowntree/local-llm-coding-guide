@@ -92,7 +92,13 @@ else
   echo "Using Qwen3.5-9B"
 fi
 
-MODEL_PATH="$MODEL_DIR/$MODEL_NAME"
+MODEL_PATH="${MODEL:-$MODEL_DIR/$MODEL_NAME}"
+# MODEL= overrides the size-arg entirely, for benchmarking a specific quant:
+#   MODEL=~/models/Qwen3.6-35B-A3B-UD-Q5_K_M.gguf ./start-server-mac.sh qwen3.6-35b-a3b
+if [ -n "${MODEL:-}" ]; then
+  [ -f "$MODEL_PATH" ] || { echo "MODEL not found: $MODEL_PATH" >&2; exit 1; }
+  echo "Model override: $(basename "$MODEL_PATH")"
+fi
 
 # --- tunables ----------------------------------------------------------------
 # --bench pins the profile the Windows/NVIDIA runs use, so cross-machine numbers
@@ -107,8 +113,8 @@ case "$REASONING" in ""|off|OFF) REASONING=0 ;; medium|MEDIUM) REASONING=1536 ;;
 CTX="${CTX:-$CONTEXT}"
 ALIAS="${ALIAS:-${DEFAULT_ALIAS:-$MODEL_SIZE}}"
 
-# Check model exists
-if [ ! -f "$MODEL_PATH" ]; then
+# Check model exists (skipped when MODEL= supplied an explicit path, checked above)
+if [ -z "${MODEL:-}" ] && [ ! -f "$MODEL_PATH" ]; then
   echo "Downloading $MODEL_NAME..."
   mkdir -p "$MODEL_DIR"
   python3 -c "
@@ -128,7 +134,10 @@ else
   cd "$HOME"
   [ ! -d llama.cpp ] && git clone https://github.com/ggml-org/llama.cpp.git
   cd llama.cpp
-  cmake -B build -DGGML_METAL=ON
+  # GGML_RPC lets this Mac act as a distributed-inference peer (rpc-server), so a
+  # model too large for either machine alone can be split across both. Harmless
+  # when unused; it only adds the backend and the rpc-server binary.
+  cmake -B build -DGGML_METAL=ON -DGGML_RPC=ON
   cmake --build build -j$(sysctl -n hw.ncpu)
   LLAMA_SERVER="$HOME/llama.cpp/build/bin/llama-server"
   cd "$SCRIPT_DIR"
