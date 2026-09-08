@@ -959,9 +959,15 @@ macOS firewall specifics.
 > 1. **Q4 on the PC alone with a high `-ncmoe`.** This is a 3B-active MoE, so
 >    CPU-resident experts are cheap (measured: `-ncmoe 8` gives ~100 tok/s), and
 >    CPU transfers happen at PCIe speed rather than over Wi-Fi.
-> 2. **Q5_K_M on the Mac alone** (26.5GB in 36GB). If this runs without swapping,
->    the Mac already beats the PC on quality with no network and no experimental
->    backend — and RPC only earns its keep at Q6 and above.
+> 2. ~~**Q5_K_M on the Mac alone**~~ — **tested 2026-09-08 and rejected.** It loaded
+>    only by evicting file cache and background apps; the machine is left one
+>    page-fault storm from the swap-thrashing measured at ~6 tok/s on the dense 31B.
+>    **The Mac's solo ceiling is Q4_K_M (22.1GB).**
+>
+> That last result cuts the other way, and is worth stating plainly: **splitting a
+> larger model across both machines can be gentler than running a smaller one solo.**
+> Q5 solo leaves the Mac ~8GB for macOS; Q6 split leaves it ~16GB, because the PC
+> absorbs ~10GB of layers. Neither machine is maxed.
 >
 > The RPC backend is experimental upstream, and peers need compatible llama.cpp
 > builds (there is no version negotiation). Benchmark before committing to it.

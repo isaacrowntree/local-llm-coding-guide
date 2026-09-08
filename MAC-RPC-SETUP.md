@@ -22,17 +22,34 @@ measure:
 |---|--------|-----:|-------|-----------|
 | 1 | Q4_K_M, PC alone, high `-ncmoe` (experts on CPU) | 22.1 GB | Windows | Likely fastest |
 | 2 | Q4_K_M, Mac alone, Metal | 22.1 GB | **Mac** | Mac baseline |
-| 3 | **Q5_K_M, Mac alone, Metal** | 26.5 GB | **Mac** | **Probably the Mac's solo ceiling — test this before bothering with RPC** |
-| 4 | Q6_K, PC coordinator + Mac RPC peer | 29.3 GB | both | Highest quality, likely slowest |
+| 3 | ~~Q5_K_M, Mac alone~~ | 26.5 GB | Mac | **TESTED — rejected, see below** |
+| 4 | Q6_K, PC coordinator + Mac RPC peer | 29.3 GB | both | Highest quality; now the main event |
 
-**Run config 3 before config 4.** If Q5_K_M runs comfortably on the Mac alone
-(26.5GB of weights in 36GB of unified memory, leaving ~7GB for KV, compute and
-macOS), then the Mac already delivers better quality than the PC can, with no
-network, no version-matching and no experimental backend. In that case RPC only
-earns its keep at Q6 and above — and the Q5-vs-Q6 quality difference is small
-enough that it may not be worth the setup at all.
+### Measured 2026-09-08: Q5_K_M does not fit the Mac comfortably
 
-That would be a genuinely useful negative result. Report it as one.
+Q5_K_M **loaded, but only by evicting everything else** — file cache and
+background apps pushed out. It technically runs; the machine does not feel usable
+and performance is one page-fault storm away from collapsing. Compare the earlier
+finding on this same Mac: the dense 31B swap-thrashed to **~6 tok/s**, 5x slower
+than a model that fit. Swap, not OOM, is the failure mode here.
+
+**So the Mac's solo ceiling is Q4_K_M (22.1GB), not Q5.**
+
+**This makes RPC *more* attractive, not less** — which is counterintuitive enough
+to state plainly:
+
+| Config | Mac holds | Mac free for macOS |
+|---|---:|---:|
+| Q5_K_M solo on Mac | 26.5 GB | ~8 GB — evicts everything |
+| Q6_K split PC + Mac | ~20 GB | **~16 GB** |
+
+Splitting keeps *both* machines under their comfort ceiling, because the PC
+absorbs ~10GB of layers. A **larger** model over RPC can be gentler on the Mac
+than a smaller one running solo. That is the case RPC now has to prove.
+
+Watch memory pressure during the RPC run too (`memory_pressure`, or Activity
+Monitor's swap figure). If the peer's share still evicts heavily, cap it — see
+`-d`/device selection on `rpc-server` — or drop to Q5_K_M split rather than Q6.
 
 RPC pays **per-token network latency** — every token crosses the wire. Config 1
 pays only PCIe-speed CPU transfers. A 3B-active MoE tolerates CPU-offloaded
@@ -89,17 +106,8 @@ huggingface-cli download unsloth/Qwen3.6-35B-A3B-GGUF \
 REASONING=0 CTX=65536 ./start-server-mac.sh qwen3.6-35b-a3b
 ```
 
-For config 3, point the script at the Q5 file:
-
-```bash
-REASONING=0 CTX=65536 MODEL=~/models/Qwen3.6-35B-A3B-UD-Q5_K_M.gguf \
-  ./start-server-mac.sh qwen3.6-35b-a3b
-```
-
-Watch memory pressure while it runs — `memory_pressure` or Activity Monitor's
-swap figure. If the Mac starts swapping, Q5 is over the line and Q4 is the solo
-ceiling. Your own earlier measurement has the dense 31B swap-thrashing at ~6 tok/s
-on this machine, so swap is the failure mode to watch for, not OOM.
+Q5_K_M solo has already been tested and rejected (see above) — do not repeat it.
+Q4_K_M is the Mac's solo configuration.
 
 Then, from a second terminal in this repo:
 
