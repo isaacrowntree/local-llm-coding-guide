@@ -1,0 +1,5 @@
+model,task,pass,duration_s,turns,input_tokens,output_tokens,eff_tok_per_s,note
+qwen3.6-local,01-fix-bug,PASS,88.5,5,35878,549,6.4,""
+qwen3.6-local,02-refactor,PASS,59.5,15,13214,1716,30.2,""
+qwen3.6-local,03-add-feature,PASS,64.5,10,12632,1402,22.7,""
+qwen3.6-local,04-codebase-search,PASS,41.9,9,11444,858,21.9,""
