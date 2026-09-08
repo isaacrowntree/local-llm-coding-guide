@@ -1,0 +1,2 @@
+model,task,pass,duration_s,turns,input_tokens,output_tokens,eff_tok_per_s,note
+rapid-mlx/Qwen3.8-27B-4bit-MTP-MLX,01-fix-bug,FAIL,905.1,,,,,"TIMEOUT after 900s; FAIL: unittest suite still failing"

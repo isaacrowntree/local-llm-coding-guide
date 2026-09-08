@@ -1,0 +1,4 @@
+model,task,pass,duration_s,turns,input_tokens,output_tokens,eff_tok_per_s,note
+muse-glimmer:30b-q4_K_M-dflash,01-fix-bug,FAIL,232.1,1,16387,209,0.9,"FAIL: unittest suite still failing"
+muse-glimmer:30b-q4_K_M-dflash,02-refactor,FAIL,246.7,2,32774,294,1.2,"FAIL: 'fetch_data' still present:"
+muse-glimmer:30b-q4_K_M-dflash,03-add-feature,FAIL,316.0,2,32774,713,2.3,"FAIL: stdout is not valid JSON: Expecting value: line 1 column 2 (char 1)"

@@ -1,0 +1,2 @@
+model,task,pass,duration_s,turns,input_tokens,output_tokens,output_tok_per_s,note
+qwen3-vl:latest,04-codebase-search,FAIL,1359.4,,,,,"TIMEOUT after 100s; FAIL: ANSWER.txt not created"

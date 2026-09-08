@@ -1,0 +1,2 @@
+model,task,pass,duration_s,turns,input_tokens,output_tokens,eff_tok_per_s,note
+fake:1b,04-codebase-search,FAIL,25.1,,,,,"TIMEOUT after 20s; FAIL: ANSWER.txt not created"
