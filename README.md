@@ -569,6 +569,7 @@ Flow 3: Cursor (Chat/Cmd+K only — Agent mode unsupported)
 | `start-remote.sh` | 2 | Linux/WSL | Tunnel llama-server for remote access (**public internet** — prefer the LAN path below) |
 | `connect-lan-mac.sh` | 2 | macOS/Linux | **Connect Claude Code to llama-server on another LAN machine** (API key + preflight check) |
 | `windows/serve-rpc.ps1` | 3 | Windows | **Distributed inference** — split one model across this GPU + a remote `rpc-server` peer |
+| `windows/serve-q4-solo.ps1` | 3 | Windows | Q4_K_M on the GPU **alone** via high `-ncmoe` — the control RPC must beat |
 | `windows/claude-local.ps1` | 1 | Windows | **Claude Code against the local model** — starts llama-server if needed |
 | `windows/claude-cloud.ps1` | — | Windows | Claude Code against the Anthropic cloud (clears `ANTHROPIC_*` so it can't be hijacked) |
 | `windows/serve-lan.ps1` | 2 | Windows | Serve the model to your LAN (`--api-key-file`, binds `0.0.0.0`) |

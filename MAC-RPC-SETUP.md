@@ -226,8 +226,13 @@ firewall or the subnet, not at llama.cpp.
 **Then tell the user the Mac's IP.** They run this on Windows:
 
 ```powershell
-windows\serve-rpc.ps1 -Remote <mac-ip>
+windows\serve-rpc.ps1 -Remote <mac-ip>                  # Q6_K
+windows\serve-rpc.ps1 -Remote <mac-ip> -Quant Q5_K_M    # if the Mac still evicts
 ```
+
+`serve-rpc.ps1` TCP-probes the peer first and refuses to start without it, so a
+failure there points at the firewall or the subnet rather than at llama.cpp. It
+also refuses clearly if the model is still downloading.
 
 The PC dials the Mac, loads Q6_K (29.3GB) split across both, and serves on
 `192.168.5.195:8080` as usual. Benchmark it the same way:
